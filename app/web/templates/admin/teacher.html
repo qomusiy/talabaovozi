@@ -1,0 +1,106 @@
+{% extends "admin/base.html" %}
+{% import "admin/_ui.html" as ui with context %}
+{% block title %}{{ d.teacher.name }}{% endblock %}
+{% block page %}teacher{% endblock %}
+{% block heading %}
+<h1>{{ d.teacher.name }}</h1><p>{{ ui.campaign_label() }}</p>
+{% endblock %}
+{% block content %}
+{% set s = d.scores %}
+{% set diff = (s.overall - d.faculty.overall) if s.overall is not none and d.faculty.overall is not none else none %}
+<section class="card">
+  <div class="profile">
+    <div class="info">
+      <h2>{{ d.teacher.name }}</h2>
+      <div class="chips">
+        <span class="chip">{{ icon('building') }}{{ d.teacher.department or t('no_department') }}</span>
+        {% if d.teacher.position %}<span class="chip">{{ icon('briefcase') }}{{ d.teacher.position }}</span>{% endif %}
+        {% if d.teacher.room %}<span class="chip">{{ icon('door') }}{{ t('room') }} {{ d.teacher.room }}</span>{% endif %}
+        <span class="chip">{{ icon('groups') }}{{ t('groups_count', n=d.groups_taught) }}</span>
+        {% if timetable_id %}<a class="chip link-chip" href="{{ url('/admin/timetable/teacher/' ~ timetable_id) }}" data-tip="{{ t('tip_open_tt') }}">{{ icon('timetable') }}{{ t('tt_open_timetable') }} →</a>{% endif %}
+        {% if is_super %}<a class="chip link-chip" href="/admin/records?tab=teachers&edit={{ d.teacher.id }}" data-tip="{{ t('rd_tip_edit_teacher') }}">{{ icon('pencil') }}{{ t('rd_edit') }}</a>{% endif %}
+      </div>
+    </div>
+    <div class="big-score">
+      <div class="v {{ band(s.overall) }}">{% if s.overall is not none %}{{ ui.count(s.overall, '%.2f'|format(s.overall), 2) }}{% else %}—{% endif %}<small> /10</small></div>
+      <div class="l">{{ t('kpi_overall') }}</div>
+    </div>
+  </div>
+</section>
+
+{{ ui.section('gauge', t('sec_metrics')) }}
+<section class="kpis">
+  <div class="kpi"><div class="label">{{ t('col_evaluations') }}</div><div class="value">{{ ui.count(d.n, d.n) }}</div>
+    <div class="foot">{{ t('with_comments', n=d.comments_count) }}</div></div>
+  <div class="kpi"><div class="label">{{ t('response_rate') }}{{ ui.info(t('i_response')) }}</div>
+    <div class="value">{% if d.response_pct is not none %}{{ ui.count(d.response_pct, d.response_pct, 1) }}<small>%</small>{% else %}—{% endif %}</div>
+    <div class="foot">{{ t('response_meta', n=d.n, total=d.expected) if d.expected and d.response_pct is not none else t('select_one_survey') }}</div></div>
+  <div class="kpi"><div class="label">{{ t('rank') }}</div>
+    <div class="value">{{ d.rank or '—' }}{% if d.rank %}<small> / {{ d.ranked_total }}</small>{% endif %}</div>
+    <div class="foot">{{ t('rank_meta') }}</div></div>
+  <div class="kpi"><div class="label">{{ t('faculty_avg') }}</div>
+    <div class="value">{{ '%.2f'|format(d.faculty.overall) if d.faculty.overall else '—' }}<small>/10</small></div>
+    <div class="foot">{% if diff is not none %}{{ ui.delta(diff, tip=t('tip_vs_faculty')) }}{% endif %}{{ t('this_teacher') }}</div></div>
+</section>
+
+{{ ui.section('star', t('sec_criteria')) }}
+<section class="card">
+  <div class="card-h"><div><h2>{{ t('compare') }}</h2><div class="sub">{{ t('crit_sub_teacher') }}</div></div></div>
+  <div class="metrics">
+    {% for key in ['overall'] + criteria.keys()|list %}{% set v = s[key] %}{% set f = d.faculty[key] %}
+    <div class="metric">
+      <div class="m-label">{{ t('overall') if key == 'overall' else t('cs_' ~ key) }}{{ ui.info(t('kpi_overall_meta') if key == 'overall' else criteria[key]) }}</div>
+      <div class="m-value">{% if v is not none %}{{ ui.count(v, '%.2f'|format(v), 2) }}<small>/10</small>{% else %}—{% endif %}
+        {% if v is not none and f is not none %}{{ ui.delta(v - f, chip=true, tip=t('tip_vs_faculty')) }}{% endif %}</div>
+      {{ ui.meter(v, f, loop.index0, t('faculty_short', v='%.2f'|format(f)) if f is not none else none) }}
+      <div class="m-note">{{ t('faculty_short', v='%.2f'|format(f)) if f is not none else '' }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+{{ ui.section('chart', t('sec_analysis')) }}
+<section class="grid">
+  <div class="card span-7">
+    <div class="card-h"><div><h2>{{ t('by_group') }}</h2><div class="sub">{{ t('by_group_sub') }}</div></div></div>
+    <div id="chart-groups" class="chart"></div>
+  </div>
+  <div class="card span-5">
+    <div class="card-h"><div><h2>{{ t('distribution') }}</h2><div class="sub">{{ t('distribution_sub') }}</div></div></div>
+    <div id="chart-distribution" class="chart" style="height:260px"></div>
+  </div>
+</section>
+
+{{ ui.section('message', t('all_feedback')) }}
+<section class="card flush">
+  <div class="card-h">
+    <div><h2>{{ t('all_feedback') }}</h2><div class="sub">{{ t('evaluations_n', n=d.feedback|length) }}</div></div>
+    <div class="toolbar">
+      <label class="check" data-tip="{{ t('tip_only_comments') }}"><input type="checkbox" id="only-comments">{{ t('only_comments') }}</label>
+      <label class="input">{{ icon('search') }}<input type="search" id="table-search" placeholder="{{ t('search_feedback') }}" aria-label="{{ t('search') }}"></label>
+    </div>
+  </div>
+  <div class="table-wrap">
+  <table id="data-table">
+    <thead><tr>
+      <th class="sortable" data-type="text">{{ t('col_date') }}</th>
+      <th class="sortable" data-type="text">{{ t('col_student') if show_who else t('col_group') }}</th>
+      {% for key in criteria %}<th class="sortable r" data-type="num" data-tip="{{ criteria[key] }}">{{ t('cs_' ~ key) }}</th>{% endfor %}
+      <th class="sortable r" data-type="num">{{ t('overall') }}</th>
+      <th>{{ t('col_comment') }}</th>
+    </tr></thead>
+    <tbody>
+    {% for f in d.feedback %}
+      <tr data-has-comment="{{ 1 if f.comment else 0 }}">
+        <td class="num muted" data-v="{{ f.date[6:] ~ f.date[3:5] ~ f.date[:2] }}">{{ f.date }}</td>
+        <td data-v="{{ f.student if show_who else f.group }}">{% if show_who %}{{ ui.person(f.student, f.group) }}{% else %}{{ f.group or '—' }}{% endif %}</td>
+        {% for key in criteria %}<td class="r" data-v="{{ f[key] }}">{{ f[key] }}</td>{% endfor %}
+        <td class="r" data-v="{{ f.overall }}">{{ ui.pill(f.overall) }}</td>
+        <td class="wrap">{{ f.comment or '' }}</td>
+      </tr>
+    {% else %}<tr><td colspan="7">{{ ui.empty('inbox', t('no_feedback')) }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endblock %}

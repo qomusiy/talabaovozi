@@ -1,0 +1,47 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ t('nav_chats') }}{% endblock %}
+{% block page %}chats{% endblock %}
+{% block campaign_select %}{% endblock %}
+{% block heading %}<h1 class="plain">{{ t('nav_chats') }}</h1><p>{{ t('chat_sub', n=num(total)) }}</p>{% endblock %}
+{% block content %}
+<section class="chat-app {{ 'has-chat' if chat }}" id="chat-app" data-list-v="{{ list_v }}" {% if chat %}data-chat="{{ chat.id }}" data-v="{{ chat_v }}"{% endif %}>
+  <aside class="chat-list" aria-label="{{ t('nav_chats') }}">
+    <form class="chat-search" method="get" action="/admin/chats">
+      {{ icon('search') }}<input type="search" name="q" id="chat-q" value="{{ q }}" placeholder="{{ t('chat_search') }}" aria-label="{{ t('chat_search') }}">
+      {% if chat %}<input type="hidden" name="c" value="{{ chat.id }}">{% endif %}
+    </form>
+    <nav class="chat-items" id="chat-items">{% include "admin/_chat_list.html" %}</nav>
+  </aside>
+
+  <div class="chat-pane">
+    {% if chat %}
+    <header class="chat-head">
+      <a class="icon-btn chat-back" href="/admin/chats{% if q %}?q={{ q|urlencode }}{% endif %}" aria-label="{{ t('back') }}">{{ icon('chevron_left') }}</a>
+      <div class="ch-who">
+        <b>{{ chat.title }}</b>
+        {% set parts = [chat.group, ('@' ~ chat.username) if chat.username else '', ('HEMIS ' ~ chat.hemis) if chat.hemis else '',
+                        chat.tg_name if chat.tg_name and chat.tg_name != chat.title else ''] %}
+        <span>{{ parts|select|join(' · ') or t('chat_guest') }}</span>
+      </div>
+      {% if chat.blocked %}<span class="state-pill down">{{ t('chat_blocked') }}</span>
+      {% elif chat.linked %}<span class="state-pill ok">{{ t('chat_logged_in') }}</span>
+      {% else %}<span class="state-pill starting">{{ t('chat_not_in') }}</span>{% endif %}
+    </header>
+    <div class="tg-wall chat-wall" id="chat-wall" aria-live="polite">{% include "admin/_chat_messages.html" %}</div>
+    <form class="chat-compose" id="chat-compose" action="/admin/chats/{{ chat.id }}/send" method="post" enctype="multipart/form-data"
+          data-sending="{{ t('chat_sending') }}">
+      <div class="compose-file" id="compose-file" hidden>{{ icon('image') }}<span class="name"></span>
+        <button type="button" class="icon-btn" id="compose-file-x" aria-label="{{ t('bc_media_remove') }}">{{ icon('x') }}</button></div>
+      <div class="compose-row">
+        <label class="icon-btn attach" data-tip="{{ t('chat_attach') }}">{{ icon('paperclip') }}<input type="file" name="photo" id="compose-photo" accept="image/jpeg,image/png,image/webp" hidden></label>
+        <textarea name="text" id="compose-text" rows="1" maxlength="4000" placeholder="{{ t('chat_write') }}" aria-label="{{ t('chat_write') }}"></textarea>
+        <button class="send-btn" type="submit" aria-label="{{ t('chat_send') }}" data-tip="{{ t('chat_send_tip') }}">{{ icon('send_right') }}</button>
+      </div>
+      <p class="compose-note" id="compose-note">{{ t('chat_note') }}</p>
+    </form>
+    {% else %}
+    <div class="chat-pick">{{ icon('chats') }}<b>{{ t('chat_pick') }}</b><span>{{ t('chat_pick_sub') }}</span></div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

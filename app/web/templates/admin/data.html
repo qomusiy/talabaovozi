@@ -1,0 +1,174 @@
+{% extends "admin/base.html" %}
+{% import "admin/_ui.html" as ui with context %}
+{% block title %}{{ t('nav_data') }}{% endblock %}
+{% block page %}data{% endblock %}
+{% block campaign_select %}{% endblock %}
+{% block heading %}<h1 class="plain">{{ t('nav_data') }}</h1><p>{{ t('data_sub') }}</p>{% endblock %}
+
+{% macro state(kind) -%}
+<span class="badge {{ {'ok': 'good', 'warn': 'warn', 'missing': 'bad'}[kind] }}">{{ t('state_' ~ kind) }}</span>
+{%- endmacro %}
+{% macro upload(action, title, hint, templates_, extra='') -%}
+<form method="post" action="{{ action }}" enctype="multipart/form-data" class="upload">
+  <div class="up-text"><b>{{ icon('upload') }}{{ title }}</b><span>{{ hint }}</span></div>
+  <div class="up-row">
+    <input type="file" name="file" accept=".xlsx" required>
+    {{ extra }}
+    <button class="btn primary sm" type="submit" data-tip="{{ t('tip_upload') }}">{{ t('upload') }}</button>
+    {% for kind, label in templates_ %}<a class="link small" href="/admin/data/template/{{ kind }}.xlsx" data-tip="{{ t('tip_template') }}">{{ icon('download') }}{{ label }}</a>{% endfor %}
+  </div>
+</form>
+{%- endmacro %}
+
+{% block content %}
+{% set sem_state = 'ok' if h.semester else 'missing' %}
+{% set tt_state = 'missing' if not h.snapshot else ('warn' if settings.timetable_error else 'ok') %}
+{% set teach_state = 'missing' if not h.assignments else ('warn' if h.orphan_groups else 'ok') %}
+{% set st_state = 'missing' if not h.students else ('warn' if h.temporary or h.no_group else 'ok') %}
+
+<nav class="stepper" aria-label="{{ t('nav_data') }}">
+  {% for key, st in [('semester', sem_state), ('timetable', tt_state), ('teaching', teach_state), ('students', st_state)] %}
+  <a href="#{{ key }}" class="{{ st }}"><span class="n">{{ loop.index }}</span><b>{{ t('step_' ~ key) }}</b>{{ state(st) }}</a>
+  {% endfor %}
+</nav>
+
+{# ---------- 1. Semester ---------- #}
+<section class="card step" id="semester">
+  <div class="step-h"><span class="n {{ sem_state }}">1</span>
+    <div><h2>{{ t('step_semester') }} {{ state(sem_state) }}</h2>
+      <div class="sub">{% if h.semester %}{{ h.semester.name }} · {{ h.semester.starts_on.strftime('%d.%m.%Y') }} → {{ h.semester.ends_on.strftime('%d.%m.%Y') }}{% else %}{{ t('sem_none') }}{% endif %}</div></div>
+    <div class="acts">
+      {% if h.semester %}<button class="btn sm" type="button" data-toggle="sem-edit" data-tip="{{ t('tip_sem_edit') }}">{{ icon('settings') }}{{ t('sv_edit') }}</button>{% endif %}
+      <button class="btn sm {{ 'primary' if not h.semester }}" type="button" data-toggle="sem-new" data-tip="{{ t('tip_sem_new') }}">{{ icon('plus') }}{{ t('sem_new') }}</button>
+    </div>
+  </div>
+  {% if h.semester %}
+  <form method="post" action="/admin/data/semester" class="form inline-edit" id="sem-edit" hidden>
+    <input type="hidden" name="semester_id" value="{{ h.semester.id }}">
+    <label class="field grow"><span class="lbl">{{ t('sem_name') }}</span><input type="text" name="name" value="{{ h.semester.name }}" required maxlength="64"></label>
+    <label class="field"><span class="lbl">{{ t('sem_starts') }}</span><input type="date" name="starts" value="{{ h.semester.starts_on }}" required></label>
+    <label class="field"><span class="lbl">{{ t('sem_ends') }}</span><input type="date" name="ends" value="{{ h.semester.ends_on }}" required></label>
+    <button class="btn primary" type="submit">{{ t('save') }}</button>
+  </form>
+  {% endif %}
+  <form method="post" action="/admin/data/semester" class="form inline-edit" id="sem-new" {{ '' if not h.semester else 'hidden' }}>
+    <label class="field grow"><span class="lbl">{{ t('sem_name') }}</span><input type="text" name="name" required maxlength="64" placeholder="{{ new_year }}–{{ new_year + 1 }} bahorgi semestr"></label>
+    <label class="field"><span class="lbl">{{ t('sem_starts') }}</span><input type="date" name="starts" required></label>
+    <label class="field"><span class="lbl">{{ t('sem_ends') }}</span><input type="date" name="ends" required></label>
+    <button class="btn primary" type="submit">{{ t('sv_create') }}</button>
+    <p class="hint wide">{{ icon('info') }}{{ t('sem_new_hint') }}</p>
+  </form>
+  {% set others = semesters|rejectattr('is_current')|list %}
+  {% if others %}
+  <div class="mini-list"><span class="lbl">{{ t('sem_others') }}:</span>
+    {% for s in others %}<form method="post" action="/admin/data/semester/{{ s.id }}/current" class="chip-form">
+      <span>{{ s.name }}</span><button class="link" type="submit" data-tip="{{ t('tip_sem_current') }}">{{ t('sem_make_current') }}</button></form>{% endfor %}
+  </div>
+  {% endif %}
+</section>
+
+{# ---------- 2. Timetable ---------- #}
+<section class="card step" id="timetable">
+  <div class="step-h"><span class="n {{ tt_state }}">2</span>
+    <div><h2>{{ t('step_timetable') }} {{ state(tt_state) }}</h2>
+      <div class="sub">{{ h.snapshot.title if h.snapshot else t('tt_empty') }}</div></div>
+    <div class="acts">
+      {% if h.snapshot %}<a class="btn sm" href="/admin/timetable" data-tip="{{ t('tip_tt_open') }}">{{ icon('timetable') }}{{ t('tt_open') }}</a>{% endif %}
+      <form method="post" action="/admin/timetable/sync" class="tt-sync"><input type="hidden" name="next" value="/admin/data#timetable">
+        <button class="btn sm primary" type="submit" data-busy="{{ t('tt_syncing') }}" data-tip="{{ t('tip_sync') }}">{{ icon('refresh') }}<span>{{ t('tt_sync_now') }}</span></button></form>
+    </div>
+  </div>
+  <dl class="facts">
+    <div><dt>{{ t('tt_src') }}</dt><dd>{% if h.snapshot and h.snapshot.source.startswith('excel:') %}{{ t('tt_src_excel') }} · {{ h.snapshot.source[6:] }}{% else %}{{ t('tt_src_edupage') }}{% endif %}</dd></div>
+    <div><dt>{{ t('tt_last_update') }}</dt><dd>{{ local_time(h.snapshot.fetched_at) if h.snapshot else '—' }}</dd></div>
+    <div><dt>{{ t('tt_last_check') }}</dt><dd>{{ checked or '—' }}</dd></div>
+  </dl>
+  {% if settings.timetable_error %}<div class="flash bad inline">{{ icon('circle_alert') }}<span>{{ t('tt_check_error', error=settings.timetable_error) }}</span></div>{% endif %}
+  <form method="post" action="/admin/data/settings" class="settings-row">
+    <input type="hidden" name="assignments_source" value="{{ settings.assignments_source }}">
+    <textarea name="excluded_subjects" hidden>{{ settings.excluded_subjects|join('\n') }}</textarea>
+    <label class="switch-row"><span class="switch"><input type="checkbox" name="timetable_auto_sync" value="true" {{ 'checked' if settings.timetable_auto_sync }}></span>
+      <span><b>{{ t('tt_auto') }}</b><span class="hint">{{ t('tt_auto_hint') }}</span></span></label>
+    <label class="field narrow"><span class="lbl">{{ t('tt_every') }}</span>
+      <input type="number" name="timetable_sync_hours" min="1" max="168" value="{{ settings.timetable_sync_hours }}"></label>
+    <button class="btn sm" type="submit">{{ t('save') }}</button>
+  </form>
+  {{ upload('/admin/data/timetable', t('up_timetable'), t('up_timetable_hint'), [('timetable', t('template'))]) }}
+</section>
+
+{# ---------- 3. Who teaches whom ---------- #}
+<section class="card step" id="teaching">
+  <div class="step-h"><span class="n {{ teach_state }}">3</span>
+    <div><h2>{{ t('step_teaching') }} {{ state(teach_state) }}</h2>
+      <div class="sub">{{ t('step_teaching_sub') }} {{ t('assignments_n', n=num(h.assignments), t=h.teachers) }}</div></div>
+    <div class="acts">
+      <form method="post" action="/admin/data/assignments/rebuild"><button class="btn sm" type="submit" data-tip="{{ t('tip_rebuild') }}">{{ icon('refresh') }}{{ t('rebuild') }}</button></form>
+    </div>
+  </div>
+  {% if h.orphan_groups %}
+  <div class="flash warn inline">{{ icon('alert') }}<span>{{ t('orphan_groups') }}
+    {% for g in h.orphan_groups %}<b>{{ g.name }}</b> ({{ g.students }}){{ ', ' if not loop.last }}{% endfor %}</span></div>
+  {% endif %}
+  <form method="post" action="/admin/data/settings" class="form">
+    {% if settings.timetable_auto_sync %}<input type="hidden" name="timetable_auto_sync" value="true">{% endif %}
+    <input type="hidden" name="timetable_sync_hours" value="{{ settings.timetable_sync_hours }}">
+    <div class="form-grid">
+      <fieldset class="field"><span class="lbl">{{ t('src_label') }}</span>
+        <label class="radio"><input type="radio" name="assignments_source" value="timetable" {{ 'checked' if settings.assignments_source == 'timetable' }}>{{ t('src_timetable') }}</label>
+        <label class="radio"><input type="radio" name="assignments_source" value="excel" {{ 'checked' if settings.assignments_source == 'excel' }}>{{ t('src_excel') }}</label>
+      </fieldset>
+      <label class="field"><span class="lbl">{{ t('excluded_label') }}</span>
+        <textarea name="excluded_subjects" rows="3">{{ settings.excluded_subjects|join('\n') }}</textarea>
+        <span class="hint">{{ t('excluded_hint') }}</span></label>
+    </div>
+    <button class="btn sm" type="submit">{{ t('save') }}</button>
+  </form>
+  {{ upload('/admin/data/teaching', t('up_teaching'), t('up_teaching_hint'), [('teaching', t('template'))]) }}
+</section>
+
+{# ---------- 4. Students ---------- #}
+<section class="card step" id="students">
+  <div class="step-h"><span class="n {{ st_state }}">4</span>
+    <div><h2>{{ t('step_students') }} {{ state(st_state) }}</h2>
+      <div class="sub">{{ t('students_n', n=num(h.students)) }}</div></div>
+    <div class="acts"><a class="btn sm" href="/admin/students" data-tip="{{ t('tip_students') }}">{{ icon('students') }}{{ t('nav_students') }}</a></div>
+  </div>
+  {% if h.temporary %}
+  <div class="flash warn inline">{{ icon('key') }}<span>{{ t('temp_codes_warn', n=num(h.temporary)) }}</span>
+    <a class="link" href="/admin/data/temporary-codes.xlsx" data-tip="{{ t('tip_temp_codes') }}">{{ icon('download') }}{{ t('temp_codes_download') }}</a></div>
+  {% endif %}
+  {% if h.no_group %}<div class="flash warn inline">{{ icon('alert') }}<span>{{ t('no_group_warn', n=h.no_group) }}</span></div>{% endif %}
+  {% set deactivate %}<label class="check"><input type="checkbox" name="deactivate_missing" value="true">{{ t('deactivate_missing') }}</label>{% endset %}
+  {{ upload('/admin/data/students', t('up_students'), t('up_students_hint'), [('students', t('template'))], deactivate) }}
+</section>
+
+{% if schema %}
+{# ---------- Data structure (programmer) ---------- #}
+<section class="card" id="schema">
+  <div class="card-h"><div><h2>{{ t('nav_schema') }}</h2><div class="sub">{{ t('schema_sub') }}</div></div>
+    <div class="legend"><span><i class="k-pk"></i>{{ t('schema_pk') }}</span><span><i class="k-fk"></i>{{ t('schema_fk') }}</span>
+      <span><i class="k-soft"></i>{{ t('schema_soft') }}</span></div></div>
+  <div class="schema" id="schema-board" aria-label="{{ t('nav_schema') }}"></div>
+  <script type="application/json" id="schema-data">{{ schema | tojson }}</script>
+</section>
+{% endif %}
+
+{# ---------- History ---------- #}
+<section class="card flush">
+  <div class="card-h"><div><h2>{{ t('history') }}</h2></div></div>
+  {% if history %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{ t('col_when') }}</th><th>{{ t('col_kind') }}</th><th>{{ t('col_file') }}</th><th>{{ t('col_result') }}</th><th>{{ t('col_by') }}</th></tr></thead>
+    <tbody>
+      {% for x in history %}
+      <tr><td class="num">{{ local_time(x.imported_at) }}</td><td>{{ t('kind_' ~ x.kind) }}</td>
+        <td class="wrap">{{ x.filename }}</td>
+        <td class="wrap" title="{{ x.note or '' }}">{{ t('tt_log', g=x.updated, n=x.created) if x.kind == 'timetable' else t('imp_log', c=num(x.created), u=num(x.updated)) }}
+          {% if x.errors %}<span class="badge warn">{{ t('imp_errors', n=x.errors) }}</span>{% endif %}</td>
+        <td>{{ t('system_user') if x.admin in hidden_users else (x.admin or '—') }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}{{ ui.empty('inbox', t('history_none')) }}{% endif %}
+</section>
+{% endblock %}

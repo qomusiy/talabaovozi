@@ -1,0 +1,65 @@
+{% extends "admin/base.html" %}
+{% import "admin/_ui.html" as ui with context %}
+{% block title %}{{ t('nav_admins') }}{% endblock %}
+{% block page %}admins{% endblock %}
+{% block campaign_select %}{% endblock %}
+{% block heading %}<h1 class="plain">{{ t('nav_admins') }}</h1><p>{{ t('adm_sub') }}</p>{% endblock %}
+{% block content %}
+<section class="grid">
+  <div class="card flush span-8">
+    <div class="card-h"><div><h2>{{ t('nav_admins') }}</h2></div></div>
+    <div class="rounds">
+      {% for a in rows %}
+      <div class="round">
+        <div class="main">
+          <div class="title"><b>{{ a.username }}</b>{% if a.id == admin.id %}<span class="tag">{{ t('adm_you') }}</span>{% endif %}
+            <span class="badge {{ 'good' if a.is_active else 'neutral' }}">{{ t('role_' ~ a.role) }}</span>
+            {% if a.role == 'viewer' %}<span class="tag muted" data-tip="{{ t('adm_identity_hint') }}">{{ icon('eye') }}{{ t('adm_identity_on') if a.show_identity else t('adm_identity_off') }}</span>{% endif %}
+            {% if a.telegram_id %}<span class="tag" data-tip="{{ t('tg_linked_tip') }}">{{ icon('send') }}{{ ('@' ~ a.telegram_username) if a.telegram_username else (a.telegram_name or 'Telegram') }}</span>
+            {% elif a.telegram_username %}<span class="tag muted" data-tip="{{ t('tg_waiting', value=a.telegram_username) }}">{{ icon('clock') }}@{{ a.telegram_username }}</span>{% endif %}</div>
+          <div class="sub">{{ local_time(a.created_at, '%d.%m.%Y') }}</div>
+        </div>
+        <div class="acts">
+          <button class="btn sm" type="button" data-toggle="adm-{{ a.id }}" data-tip="{{ t('tip_adm_edit') }}">{{ icon('settings') }}{{ t('sv_edit') }}</button>
+          {% if a.id != admin.id %}
+          <form method="post" action="/admin/admins/{{ a.id }}/delete" data-confirm="{{ t('adm_delete_confirm') }}">
+            <button class="btn sm danger icon-only" type="submit" data-tip="{{ t('tip_adm_delete') }}" aria-label="{{ t('sv_delete') }}">{{ icon('trash') }}</button></form>
+          {% endif %}
+        </div>
+        <form method="post" action="/admin/admins/{{ a.id }}/edit" class="form inline-edit" id="adm-{{ a.id }}" hidden>
+          {% if a.role != 'programmer' %}
+          <label class="field"><span class="lbl">{{ t('col_role') }}</span>
+            <select name="role" data-role>{% for r in ['superadmin', 'viewer'] %}<option value="{{ r }}" {{ 'selected' if a.role == r }}>{{ t('role_' ~ r) }}</option>{% endfor %}</select></label>
+          {% endif %}
+          <label class="field grow"><span class="lbl">{{ t('adm_new_password') }}</span><input type="password" name="password" minlength="8" autocomplete="new-password"></label>
+          {% if a.telegram_id %}
+          <label class="check"><input type="checkbox" name="tg_unlink" value="true">{{ t('tg_unlink') }} ({{ ('@' ~ a.telegram_username) if a.telegram_username else a.telegram_name }})</label>
+          {% else %}
+          <label class="field grow"><span class="lbl">{{ t('tg_username') }}</span><input type="text" name="telegram_username" value="{{ '@' ~ a.telegram_username if a.telegram_username else '' }}" placeholder="@username" maxlength="40"></label>
+          {% endif %}
+          <label class="check"><input type="checkbox" name="is_active" value="true" {{ 'checked' if a.is_active }}>{{ t('col_active') }}</label>
+          <label class="switch-row wide" data-viewer-only {{ 'hidden' if a.role != 'viewer' }}><span class="switch"><input type="checkbox" name="show_identity" value="true" {{ 'checked' if a.show_identity }}></span>
+            <span><b>{{ t('adm_identity') }}</b><span class="hint">{{ t('adm_identity_hint') }}</span></span></label>
+          <button class="btn primary" type="submit">{{ t('save') }}</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="card span-4">
+    <div class="card-h"><div><h2>{{ t('adm_new') }}</h2></div></div>
+    <form method="post" action="/admin/admins/new" class="form">
+      <label class="field"><span class="lbl">{{ t('col_username') }}</span><input type="text" name="username" required maxlength="64" autocomplete="off"></label>
+      <label class="field"><span class="lbl">{{ t('adm_password') }}</span><input type="password" name="password" required minlength="8" autocomplete="new-password"></label>
+      <label class="field"><span class="lbl">{{ t('tg_username') }} <span class="muted">({{ t('optional') }})</span></span>
+        <input type="text" name="telegram_username" placeholder="@username" maxlength="40" autocomplete="off">
+        <span class="hint">{{ t('tg_username_hint') }}</span></label>
+      <label class="field"><span class="lbl">{{ t('col_role') }}</span>
+        <select name="role" data-role><option value="viewer">{{ t('role_viewer') }}</option><option value="superadmin">{{ t('role_superadmin') }}</option></select></label>
+      <label class="switch-row" data-viewer-only><span class="switch"><input type="checkbox" name="show_identity" value="true" checked></span>
+        <span><b>{{ t('adm_identity') }}</b><span class="hint">{{ t('adm_identity_hint') }}</span></span></label>
+      <button class="btn primary" type="submit" data-tip="{{ t('tip_adm_create') }}">{{ icon('plus') }}{{ t('adm_create') }}</button>
+    </form>
+  </div>
+</section>
+{% endblock %}

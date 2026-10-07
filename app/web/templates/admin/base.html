@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="{{ lang }}" {{ display_attrs }}>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{% endblock %} · Talaba Ovozi</title>
+  <link rel="icon" href="/static/logo-admin.svg" type="image/svg+xml">
+  <link rel="preload" href="/static/vendor/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/static/vendor/geist-mono-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/static/fonts-admin.css?v=1">
+  <link rel="stylesheet" href="/static/admin.css?v=16">
+</head>
+<body data-page="{% block page %}{% endblock %}">
+<div class="progress" id="progress" aria-hidden="true"></div>
+{# Phones and tablets: a top bar with the menu button; the sidebar slides in as a drawer. #}
+<header class="mbar">
+  <button class="mbar-btn" type="button" id="nav-open" aria-label="{{ t('menu') }}" aria-controls="sidebar" aria-expanded="false">{{ icon('menu') }}</button>
+  <a class="mbar-brand" href="{{ url('/admin') }}" data-nav><b>Talaba Ovozi</b><span>{{ t('brand_sub') }}</span></a>
+</header>
+<div class="scrim" id="scrim" hidden></div>
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <button class="side-close" type="button" id="nav-close" aria-label="{{ t('cancel') }}">{{ icon('x') }}</button>
+    <a class="brand" href="{{ url('/admin') }}" data-nav><div><b>Talaba Ovozi</b><span>{{ t('brand_sub') }}</span></div></a>
+    <div class="nav-label" style="--dash: var(--s1)">{{ t('nav_section') }}</div>
+    <nav class="nav">
+      {# Students are reached through their group (Groups › 25-16 IQT talabalari), so Groups stays lit there. #}
+      {% for href, key, ic in [('/admin', 'nav_overview', 'overview'), ('/admin/teachers', 'nav_teachers', 'teachers'),
+                                ('/admin/groups', 'nav_groups', 'groups'), ('/admin/comments', 'nav_comments', 'message')] %}
+      <a href="{{ url(href) }}" class="{{ 'on' if (path == href if href == '/admin' else path.startswith(href) or (href == '/admin/groups' and path.startswith('/admin/students'))) }}" data-nav>{{ icon(ic) }}{{ t(key) }}</a>
+      {% endfor %}
+    </nav>
+    <div class="nav-label" style="--dash: var(--s2)">{{ t('nav_section_ref') }}</div>
+    <nav class="nav">
+      <a href="{{ url('/admin/timetable') }}" class="{{ 'on' if path.startswith('/admin/timetable') }}" data-nav>{{ icon('timetable') }}{{ t('nav_timetable') }}</a>
+    </nav>
+    {% if is_super %}
+    <div class="nav-label" style="--dash: var(--s3)">{{ t('nav_section_manage') }}</div>
+    <nav class="nav">
+      {% for href, key, ic in [('/admin/surveys', 'nav_surveys', 'clipboard'), ('/admin/data', 'nav_data', 'database'),
+                                ('/admin/records', 'nav_records', 'pencil'), ('/admin/bot', 'nav_bot', 'bot'),
+                                ('/admin/admins', 'nav_admins', 'shield')] %}
+      <a href="{{ url(href) }}" class="{{ 'on' if path.startswith(href) }}" data-nav>{{ icon(ic) }}{{ t(key) }}</a>
+      {% endfor %}
+    </nav>
+    {% endif %}
+    {% if is_programmer %}
+    <div class="nav-label" style="--dash: var(--s4)">{{ t('nav_section_dev') }}</div>
+    <nav class="nav">
+      <a href="/admin/audit" class="{{ 'on' if path.startswith('/admin/audit') }}" data-nav>{{ icon('activity') }}{{ t('nav_audit') }}</a>
+      <a href="/admin/chats" class="{{ 'on' if path.startswith('/admin/chats') }}" data-nav>{{ icon('chats') }}{{ t('nav_chats') }}</a>
+      <a href="/admin/records?tab=feedback" class="{{ 'on' if path.startswith('/admin/records') and request.query_params.get('tab') == 'feedback' }}" data-nav>{{ icon('star') }}{{ t('rd_tab_feedback') }}</a>
+      <a href="/admin/data#schema" data-nav>{{ icon('database') }}{{ t('nav_schema') }}</a>
+    </nav>
+    {% endif %}
+    <div class="user">
+      <a class="who" href="{{ url('/admin/account') }}" data-nav data-tip="{{ t('tip_account') }}">
+        <span class="txt"><b>{{ admin.username }}</b><span>{{ t('role_' ~ admin.role) }}{% if not show_who %} · <span class="priv" data-tip="{{ t('hide_names_on') }}">{{ icon('eye_off') }}{{ t('hide_names_short') }}</span>{% endif %}</span></span></a>
+      <button class="view" type="button" data-open-display data-tip="{{ t('dp_title') }}" aria-label="{{ t('dp_title') }}">{{ icon('text_size') }}</button>
+      <a class="out" href="/admin/logout" data-tip="{{ t('tip_logout') }}" aria-label="{{ t('logout') }}">{{ icon('logout') }}</a>
+    </div>
+  </aside>
+
+  <main class="main"><div class="panel">
+    <header class="header" id="topbar">
+      {% set trail = crumbs.fallback %}
+      <div class="head {{ 'crumbed' if trail|length > 1 }}" id="head">
+        {# The path taken to this page; static/crumbs.js redraws it from what this browser tab remembers. #}
+        <nav class="crumbs" id="crumbs" aria-label="{{ t('crumbs_label') }}" data-back="{{ t('tip_back') }}" data-back-label="{{ t('back') }}">
+          {%- if trail|length > 1 %}
+          <a class="crumb-back" href="{{ trail[-2].url }}" data-tip="{{ t('tip_back') }}" aria-label="{{ t('back') }}">{{ icon('chevron_left') }}</a>
+          <ol>{% for c in trail %}<li>{% if not loop.first %}{{ icon('chevron_right', 'sep') }}{% endif %}
+            {%- if loop.last %}<span aria-current="page">{{ c.label.s }}</span>{% else %}<a href="{{ c.url }}">{{ c.label.s }}</a>{% endif %}</li>{% endfor %}</ol>
+          {%- endif %}
+        </nav>
+        <script type="application/json" id="crumb-data">{{ crumbs | tojson }}</script>
+        <script src="/static/crumbs.js?v=2"></script>
+        {% block heading %}{% endblock %}
+      </div>
+      <div class="controls">
+        {% block campaign_select %}
+        <label class="select" data-tip="{{ t('tip_campaign') }}">{{ icon('calendar') }}
+          <select id="campaign-select" aria-label="{{ t('col_survey') }}">
+            <option value="all" {{ 'selected' if campaign_id is none }}>{{ t('all_surveys') }}</option>
+            {% for c in campaigns %}
+            <option value="{{ c.id }}" {{ 'selected' if c.id == campaign_id }}>{{ c.semester.name }} · {{ c.title }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        {% endblock %}
+        <details class="dropdown" id="lang-menu">
+          <summary class="btn" data-tip="{{ t('tip_lang') }}" aria-label="{{ t('language') }}: {{ langs[lang] }}">{{ icon('globe') }}<span>{{ langs[lang] }}</span>{{ icon('chevron_down', 'caret') }}</summary>
+          <div class="menu">
+            {% for code in langs %}<a href="/admin/lang/{{ code }}?next={{ current_url }}" class="{{ 'on' if code == lang }}" hreflang="{{ code }}" lang="{{ code }}" {% if code == lang %}aria-current="true"{% endif %}>
+              <span class="lang-code">{{ code | upper }}</span>{{ langs[code] }}{% if code == lang %}{{ icon('check', 'tick') }}{% endif %}</a>{% endfor %}
+          </div>
+        </details>
+        {% block actions %}{% endblock %}
+      </div>
+    </header>
+    <div class="content">
+    {% if demo_active and path != '/admin/surveys' %}
+    <div class="demo-bar">{{ icon('info') }}<span>{{ t('demo_bar') }}</span>
+      {% if is_super %}<a href="{{ url('/admin/surveys') }}">{{ t('demo_bar_link') }} →</a>{% endif %}</div>
+    {% endif %}
+    {% if flash %}<div class="flash {{ flash.kind }}" role="status">{{ icon('check' if flash.kind == 'good' else 'circle_alert' if flash.kind == 'bad' else 'info') }}<span>{{ flash.text }}</span></div>{% endif %}
+    {% block content %}{% endblock %}
+    </div>
+  </div></main>
+</div>
+{# Ko‘rinish: text size, theme, contrast, motion, spacing - applied at once and saved with the account. #}
+<dialog class="modal display-dialog" id="display-dialog" aria-labelledby="dp-title" data-url="/admin/account/display">
+  <form class="form" id="display-form" method="post" action="/admin/account/display">
+    <div class="modal-h"><h2 id="dp-title">{{ icon('text_size') }}{{ t('dp_title') }}</h2>
+      <button class="btn sm icon-only ghost" type="button" data-close aria-label="{{ t('cancel') }}">{{ icon('x') }}</button></div>
+    <div class="modal-b">
+      <fieldset><legend class="lbl">{{ t('dp_text') }}</legend>
+        <div class="size-pick">{% for n in [90, 100, 112, 125, 150] %}
+          <label class="size-opt"><input type="radio" name="text" value="{{ n }}" {{ 'checked' if display.text == n }}>
+            <span class="aa" style="font-size: {{ (n * 0.17)|round(1) }}px" aria-hidden="true">Aa</span><small>{{ t('dp_size_' ~ n) }}</small></label>{% endfor %}</div>
+        <span class="hint">{{ t('dp_text_hint') }}</span></fieldset>
+      <fieldset><legend class="lbl">{{ t('dp_theme') }}</legend>
+        <div class="theme-pick">{% for th, ic in [('auto', 'monitor'), ('light', 'sun'), ('dark', 'moon')] %}
+          <label class="theme-opt"><input type="radio" name="theme" value="{{ th }}" {{ 'checked' if display.theme == th }}>{{ icon(ic) }}<span>{{ t('dp_theme_' ~ th) }}</span></label>{% endfor %}</div></fieldset>
+      <div class="switches">
+        {% for key, ic in [('contrast', 'contrast'), ('motion', 'pause'), ('spacing', 'type'), ('links', 'link')] %}
+        <label class="switch-row"><span class="switch"><input type="checkbox" name="{{ key }}" value="true" {{ 'checked' if display[key] }}></span>
+          <span><b>{{ t('dp_' ~ key) }}</b><span class="hint">{{ t('dp_' ~ key ~ '_hint') }}</span></span></label>
+        {% endfor %}
+      </div>
+      <fieldset class="privacy"><legend class="lbl">{{ t('dp_privacy') }}</legend>
+        {% set forced = admin.role == 'viewer' and not admin.show_identity %}
+        <label class="switch-row"><span class="switch"><input type="checkbox" name="hide_names" value="true" {{ 'checked' if display.hide_names or forced }} {{ 'disabled' if forced }} data-reload></span>
+          <span><b>{{ icon('eye_off') }}{{ t('dp_hide_names') }}</b><span class="hint">{{ t('dp_hide_names_forced') if forced else t('dp_hide_names_hint') }}</span></span></label>
+      </fieldset>
+      <p class="dp-sample">{{ t('dp_sample') }} <a class="link" href="#" onclick="return false">{{ t('dp_sample_link') }}</a></p>
+    </div>
+    <div class="modal-f">
+      <button class="btn primary" type="button" data-close>{{ t('dp_done') }}</button>
+      <span class="muted" id="dp-saved" role="status" data-text="{{ t('dp_saved') }}"></span>
+      <span class="spacer"></span>
+      <button class="btn ghost" type="button" id="dp-reset">{{ icon('refresh') }}{{ t('dp_reset') }}</button>
+    </div>
+  </form>
+</dialog>
+<script type="application/json" id="i18n">{{ js_texts | tojson }}</script>
+{% if data is defined %}<script type="application/json" id="page-data">{{ data | tojson }}</script>{% endif %}
+<script src="/static/vendor/echarts.min.js"></script>
+<script src="/static/admin.js?v=17"></script>
+</body>
+</html>

@@ -1,0 +1,46 @@
+{% extends "admin/base.html" %}
+{% import "admin/_ui.html" as ui with context %}
+{% block title %}{{ t('nav_teachers') }}{% endblock %}
+{% block page %}teachers{% endblock %}
+{% block heading %}<h1 class="plain">{{ t('nav_teachers') }}</h1><p>{{ ui.campaign_label() }}</p>{% endblock %}
+{% block content %}
+<section class="card flush">
+  <div class="card-h">
+    <div><h2>{{ t('nav_teachers') }}</h2><div class="sub">{{ t('teachers_sub', n=rows|length) }}</div></div>
+    <div class="toolbar">
+      <label class="input">{{ icon('search') }}<input type="search" id="table-search" placeholder="{{ t('search_teacher') }}" aria-label="{{ t('search') }}"></label>
+      <label class="select" data-tip="{{ t('tip_department') }}">{{ icon('building') }}
+        <select onchange="location.href='{{ url('/admin/teachers') }}&department='+this.value" aria-label="{{ t('col_department') }}">
+          <option value="">{{ t('all_departments') }}</option>
+          {% for label, ds in departments %}<optgroup label="{{ label }}">
+            {% for d in ds %}<option value="{{ d.id }}" {{ 'selected' if d.id == department_id }}>{{ d.name }}</option>{% endfor %}</optgroup>{% endfor %}
+        </select></label>
+    </div>
+  </div>
+  <div class="table-wrap">
+  <table id="data-table">
+    <thead><tr>
+      <th class="sortable" data-type="text">{{ t('col_teacher') }}</th>
+      <th class="sortable r" data-type="num">{{ t('col_evaluations') }}</th>
+      <th class="sortable r" data-type="num">{{ t('col_response') }}</th>
+      {% for key in criteria %}<th class="sortable r" data-type="num" data-tip="{{ criteria[key] }}">{{ t('cs_' ~ key) }}</th>{% endfor %}
+      <th class="sortable r desc" data-type="num" data-default>{{ t('overall') }}</th>
+      <th class="sortable r" data-type="num">{{ t('col_comments') }}</th>
+    </tr></thead>
+    <tbody>
+    {% for x in rows %}
+      <tr class="link" data-href="{{ url('/admin/teachers/' ~ x.id) }}">
+        <td data-v="{{ x.name }}">{{ ui.person(x.name, x.department or t('no_department'), url('/admin/teachers/' ~ x.id)) }}</td>
+        <td class="r" data-v="{{ x.n }}">{{ x.n }}</td>
+        <td class="r" data-v="{{ x.response_pct if x.response_pct is not none else -1 }}">
+          {% if x.response_pct is not none %}<span class="bar-cell">{{ x.response_pct }}%<span class="track"><i style="width:{{ [x.response_pct, 100]|min }}%"></i></span></span>{% else %}<span class="muted">—</span>{% endif %}</td>
+        {% for key in criteria %}<td class="r" data-v="{{ x[key] if x[key] is not none else -1 }}">{{ '%.2f'|format(x[key]) if x[key] is not none else '—' }}</td>{% endfor %}
+        <td class="r" data-v="{{ x.overall if x.overall is not none else -1 }}">{{ ui.pill(x.overall) }}</td>
+        <td class="r" data-v="{{ x.comments }}">{{ x.comments }}</td>
+      </tr>
+    {% else %}<tr><td colspan="8">{{ ui.empty('inbox', t('no_teachers')) }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endblock %}

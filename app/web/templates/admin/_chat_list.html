@@ -1,0 +1,11 @@
+{# The conversations, newest first (admin/chats.html; refreshed by admin.js). #}
+{% for p in people %}
+<a class="chat-item {{ 'on' if chat and chat.id == p.id }}" href="/admin/chats?c={{ p.id }}{% if q %}&q={{ q|urlencode }}{% endif %}" data-chat-id="{{ p.id }}">
+  <span class="ci-top"><b>{{ p.title }}</b><span class="ci-time">{{ when(p.last_at) }}</span></span>
+  <span class="ci-sub">{% if p.group %}{{ p.group }}{% elif p.username %}@{{ p.username }}{% else %}{{ t('chat_guest') }}{% endif %}
+    {%- if p.blocked %} · <span class="ci-flag bad">{{ t('chat_blocked') }}</span>{% elif not p.linked %} · <span class="ci-flag">{{ t('chat_not_in') }}</span>{% endif %}</span>
+  <span class="ci-last">{% if p.last_dir == 'out' %}<em>{{ t('chat_bot') }}:</em> {% endif %}{{ p.last_text }}</span>
+</a>
+{% else %}
+<div class="chat-none">{{ icon('search') }}<span>{{ t('chat_none_found') if q else t('chat_none') }}</span></div>
+{% endfor %}

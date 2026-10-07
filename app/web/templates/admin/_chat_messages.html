@@ -1,0 +1,30 @@
+{# One conversation, Telegram style: the person on the left, the bot on the right (admin/chats.html). #}
+{% for item in items %}
+{% if item.day %}<div class="tg-day"><span>{{ item.day }}</span></div>
+{% else %}{% set m = item.m %}
+{% if m.dir == 'tap' %}
+<div class="tg-tap" title="{{ hm(m.at) }}">{{ icon('pointer') }}<span>{{ t('chat_tapped') }} <b>{{ m.text|safe }}</b></span><span class="tg-time">{{ hm(m.at) }}</span></div>
+{% elif m.kind in ('alert', 'toast') %}
+<div class="tg-service"><span>{{ '🔔' if m.kind == 'alert' else '💬' }} {{ t('chat_popup') }}: {{ m.text|safe }} · {{ hm(m.at) }}</span></div>
+{% else %}
+<div class="tg-msg {{ 'out' if m.dir == 'out' else 'in' }} {{ 'deleted' if m.deleted }}" id="m{{ m.id }}">
+  {% if m.dir == 'out' and m.origin and m.origin != 'bot' %}
+  <div class="tg-origin">{% if m.origin.startswith('broadcast') %}{{ icon('send') }}{{ t('chat_from_broadcast') }}{% elif m.origin == 'reminder' %}{{ icon('clock') }}{{ t('chat_from_reminder') }}{% elif m.origin == 'panel' %}{{ icon('pencil') }}{{ t('chat_from_panel', name=admins.get(m.admin_id, '?')) }}{% elif m.origin == 'system' %}{{ icon('refresh') }}{{ t('chat_from_system') }}{% elif m.origin == 'report' %}{{ icon('chart') }}{{ t('chat_from_report') }}{% endif %}</div>
+  {% endif %}
+  <div class="tg-bubble {{ 'media' if m.kind == 'photo' }} {{ 'sticker' if m.kind == 'sticker' }}">
+    {% if m.kind == 'photo' and m.file_id %}<img class="tg-photo" src="/admin/chats/file/{{ m.id }}" alt="" loading="lazy">
+    {% elif m.kind == 'sticker' %}<div class="tg-sticker">{{ m.text|safe or '🖼' }}</div>
+    {% elif m.kind not in ('text', 'photo') %}<div class="tg-doc">{{ icon({'video': 'video', 'video_note': 'video', 'animation': 'video', 'voice': 'clock', 'audio': 'clock'}.get(m.kind, 'paperclip')) }}<span>{{ t('chat_kind_' ~ m.kind) }}</span></div>{% endif %}
+    {% if m.text and m.kind != 'sticker' %}<div class="tg-text">{{ safe_html(m.text) }}</div>{% endif %}
+    <span class="tg-time">{% if m.deleted %}<em>{{ t('chat_deleted') }}</em> · {% elif m.edited_at %}<em>{{ t('chat_edited') }}</em> {% endif %}{{ hm(m.at) }}</span>
+    {% if m.reaction %}<span class="tg-reaction" data-tip="{{ t('chat_reaction') }}">{{ m.reaction }}</span>{% endif %}
+  </div>
+  {% for row in m.buttons or [] %}
+  <div class="tg-btns">{% for b in row %}<span class="k-{{ b.k }}">{{ b.t }}{% if b.k == 'url' %} ↗{% elif b.k == 'app' %} ⧉{% endif %}</span>{% endfor %}</div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endif %}
+{% else %}
+<div class="chat-none">{{ icon('chats') }}<span>{{ t('chat_empty') }}</span></div>
+{% endfor %}

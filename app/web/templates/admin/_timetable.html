@@ -1,0 +1,56 @@
+{# Timetable pieces. Import with: {% import "admin/_timetable.html" as tt_ui with context %} #}
+
+{# 14.0 -> "14", 13.5 -> "13.5" (A/B-week lessons count as half a class per week) #}
+{% macro fmt_pairs(v) -%}{{ v|int if v == v|int else v }}{%- endmacro %}
+
+{% macro sync_button() -%}
+<form method="post" action="/admin/timetable/sync" class="tt-sync">
+  <input type="hidden" name="next" value="{{ path }}">
+  <button class="btn primary" type="submit" data-busy="{{ t('tt_syncing') }}" data-tip="{{ t('tip_sync') }}">{{ icon('refresh') }}<span>{{ t('tt_sync') }}</span></button>
+</form>
+{%- endmacro %}
+
+{# Share of lesson types: one stacked bar + a legend that names each segment. #}
+{% macro mix_block(mix) -%}
+<div class="tt-mix">
+  <div class="bar" role="img" aria-label="{{ t('tt_mix') }}">
+    {% for m in mix %}<i class="t-{{ m.type }}" style="flex:{{ m.pairs }}" title="{{ t('t_' ~ m.type) }} · {{ m.pct }}%"></i>{% endfor %}
+  </div>
+  <div class="rows-list">
+    {% for m in mix %}
+    <div class="row"><span class="dot t-{{ m.type }}"></span><span class="name">{{ t('t_' ~ m.type) }}</span>
+      <span class="n">{{ fmt_pairs(m.pairs) }}</span><span class="pct">{{ m.pct }}%</span></div>
+    {% endfor %}
+  </div>
+</div>
+{%- endmacro %}
+
+{% macro type_label(type) -%}
+<span class="tt-type t-{{ type }}"><i></i>{{ t('t_' ~ type) }}</span>
+{%- endmacro %}
+
+{# People on a lesson card: teachers (group view) or groups (teacher view); groups of other faculties aren't links. #}
+{% macro people(x, kind, limit=3) -%}
+  {%- if kind == 'group' -%}
+    {%- for pid in x.teachers -%}{% set p = tt.teachers[pid] %}
+      {%- if p.faculty %}<a href="{{ url('/admin/timetable/teacher/' ~ pid) }}">{{ p.name }}</a>{% else %}<span>{{ p.name }}</span>{% endif %}{{ ', ' if not loop.last }}
+    {%- endfor -%}
+  {%- else -%}
+    {%- for gid in x.groups[:limit] -%}{% set g = tt.groups[gid] %}
+      {%- if g.faculty %}<a href="{{ url('/admin/timetable/group/' ~ gid) }}">{{ g.name }}</a>{% else %}<span title="{{ t('tt_other_faculty') }}">{{ g.name }}</span>{% endif %}{{ ', ' if not loop.last }}
+    {%- endfor -%}
+    {%- if x.groups|length > limit %} <span class="more" title="{% for gid in x.groups[limit:] %}{{ tt.groups[gid].name }}{{ ', ' if not loop.last }}{% endfor %}">+{{ x.groups|length - limit }}</span>{% endif -%}
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro lesson(x, kind) -%}
+<div class="tt-lesson t-{{ x.type }}">
+  <div class="top">{% if x.type != 'other' %}<span class="type">{{ t('t_' ~ x.type) }}</span>{% endif %}
+    {%- if x.week %}<span class="wk" title="{{ t('tt_week_' ~ x.week|lower) }}">{{ t('tt_week_' ~ x.week|lower) }}</span>{% endif %}</div>
+  <div class="subj">{{ x.subject }}</div>
+  <div class="meta">
+    {% if x.room %}<span class="room">{{ icon('door') }}{{ x.room }}</span>{% endif %}
+    {% if (x.teachers if kind == 'group' else x.groups) %}<span class="who">{{ icon('teachers' if kind == 'group' else 'groups') }}<span>{{ people(x, kind) }}</span></span>{% endif %}
+  </div>
+</div>
+{%- endmacro %}

@@ -1,0 +1,132 @@
+{% extends "admin/base.html" %}
+{% import "admin/_ui.html" as ui with context %}
+{% import "admin/_timetable.html" as tt_ui with context %}
+{% block title %}{{ entity.name }} · {{ t('tt_title') }}{% endblock %}
+{% block page %}timetable-week{% endblock %}
+{% block campaign_select %}{% endblock %}
+{% block heading %}
+<h1>{{ entity.name }}</h1>
+<p>{{ t('tt_source', title=tt.title) }} · {{ t('tt_updated', date=updated) }}</p>
+{% endblock %}
+{% block actions %}
+<label class="select" data-tip="{{ t('tip_switch_' ~ kind) }}">{{ icon('groups' if kind == 'group' else 'teachers') }}
+  <select id="tt-switch" aria-label="{{ t('tt_switch_' ~ kind) }}">
+    {% if kind == 'group' %}
+      {% for course, groups in courses %}<optgroup label="{{ t('course_n', n=course) if course else '?' }}">
+        {% for g in groups %}<option value="{{ url('/admin/timetable/group/' ~ g.id) }}" {{ 'selected' if g.id == entity.id }}>{{ g.name }}</option>{% endfor %}
+      </optgroup>{% endfor %}
+    {% else %}
+      {% for x in teachers %}<option value="{{ url('/admin/timetable/teacher/' ~ x.id) }}" {{ 'selected' if x.id == entity.id }}>{{ x.name }}</option>{% endfor %}
+    {% endif %}
+  </select>
+</label>
+{% endblock %}
+
+{% macro person_chips(ids) -%}
+  {%- for pid in ids -%}
+    {%- if kind == 'group' %}{% set p = tt.teachers[pid] %}{% if p.faculty %}<a href="{{ url('/admin/timetable/teacher/' ~ pid) }}">{{ p.name }}</a>{% else %}<span>{{ p.name }}</span>{% endif %}
+    {%- else %}{% set g = tt.groups[pid] %}{% if g.faculty %}<a href="{{ url('/admin/timetable/group/' ~ pid) }}">{{ g.name }}</a>{% else %}<span title="{{ t('tt_other_faculty') }}">{{ g.name }}</span>{% endif %}
+    {%- endif %}
+  {%- endfor -%}
+{%- endmacro %}
+
+{% block content %}
+<section class="card tt-hero">
+  <div class="info">
+    <h2>{{ entity.name }}</h2>
+    <div class="chips">
+      {% if kind == 'group' %}
+        {% if entity.course %}<span class="chip">{{ icon('groups') }}{{ t('course_n', n=entity.course) }}</span>{% endif %}
+        {% if entity.specialty %}<span class="chip">{{ icon('book') }}{{ specialty(entity.specialty) }}</span>{% endif %}
+        {% if entity.lang != 'uz' %}<span class="chip">{{ icon('globe') }}{{ t('tt_lang_' ~ entity.lang) }}</span>{% endif %}
+        {% if entity.note %}<span class="chip">{{ icon('briefcase') }}{{ entity.note }}</span>{% endif %}
+      {% else %}
+        <span class="chip">{{ icon('groups') }}{{ t('groups_count', n=people) }}</span>
+        <span class="chip">{{ icon('book') }}{{ t('tt_k_subjects') }}: {{ stats.subjects }}</span>
+        {% if feedback_id %}<a class="chip link-chip" href="{{ url('/admin/teachers/' ~ feedback_id) }}" data-tip="{{ t('tip_open_feedback') }}">{{ icon('chart') }}{{ t('tt_feedback') }} →</a>{% endif %}
+      {% endif %}
+    </div>
+  </div>
+  {% if stats.mix %}<div class="tt-hero-mix">{{ tt_ui.mix_block(stats.mix) }}</div>{% endif %}
+</section>
+
+<section class="kpis">
+  <div class="kpi"><div class="label">{{ t('tt_k_pairs') }}</div><div class="value">{{ tt_ui.fmt_pairs(stats.pairs) }}</div>
+    <div class="foot">{{ t('tt_k_subjects') }}: {{ stats.subjects }}</div></div>
+  <div class="kpi"><div class="label">{{ t('tt_k_teachers') if kind == 'group' else t('tt_k_groups') }}</div><div class="value">{{ people }}</div>
+    <div class="foot">{{ t('tt_k_teachers_meta') if kind == 'group' else t('tt_k_groups_meta') }}</div></div>
+  <div class="kpi"><div class="label">{{ t('tt_k_days') }}</div><div class="value">{{ stats.days }}</div>
+    <div class="foot">{{ t('tt_k_days_meta') }}</div></div>
+  <div class="kpi"><div class="label">{{ t('tt_k_busiest') }}</div>
+    <div class="value">{{ day_names[stats.busiest.day] if stats.busiest else '—' }}</div>
+    <div class="foot">{% if stats.busiest %}{{ t('tt_lessons_n', n=tt_ui.fmt_pairs(stats.busiest.pairs)) }}{% endif %}</div></div>
+</section>
+
+<section class="card flush">
+  <div class="card-h">
+    <div><h2>{{ t('tt_week_title') }}</h2>{% if week.alternating %}<div class="sub">{{ t('tt_weeks_note') }}</div>{% endif %}</div>
+    <div class="legend">{% for m in stats.mix %}<span><i class="t-{{ m.type }}"></i>{{ t('t_' ~ m.type) }}</span>{% endfor %}</div>
+  </div>
+  {% if not stats.pairs %}{{ ui.empty('timetable', t('tt_no_lessons')) }}{% else %}
+
+  {# Wide screens: days x periods grid #}
+  <div class="tt-scroll">
+    <div class="tt-grid" style="--days: {{ week.days|length }}">
+      <div class="tt-corner"></div>
+      {% for d in week.days %}
+      <div class="tt-dayh {{ 'today' if d.today }}"><b>{{ day_names[d.n] }}</b>
+        <span>{% if d.today %}<em>{{ t('tt_today') }}</em>{% endif %}{{ t('tt_lessons_n', n=tt_ui.fmt_pairs(d.pairs)) if d.pairs else '—' }}</span></div>
+      {% endfor %}
+      {% for row in week.rows %}
+      <div class="tt-time {{ 'now' if row.now }}"><b>{{ row.period.n }}</b><span>{{ row.period.start }}</span><span>{{ row.period.end }}</span></div>
+      {% for cell in row.cells %}{% set day = week.days[loop.index0] %}
+      <div class="tt-cell {{ 'today' if day.today }} {{ 'now' if row.now and day.today }} {{ 'empty' if not cell }}">
+        {% if row.now and day.today %}<span class="now-tag">{{ t('tt_now') }}</span>{% endif %}
+        {% for x in cell %}{{ tt_ui.lesson(x, kind) }}{% endfor %}
+      </div>
+      {% endfor %}
+      {% if row.lunch %}<div class="tt-lunch"><span>{{ t('tt_lunch') }} · {{ row.lunch.start }}–{{ row.lunch.end }}</span></div>{% endif %}
+      {% endfor %}
+    </div>
+  </div>
+
+  {# Phones: one list per day #}
+  <div class="tt-list">
+    {% for d in week.days %}{% set di = loop.index0 %}
+    <div class="tt-list-day {{ 'today' if d.today }}">
+      <h3>{{ day_names[d.n] }}{% if d.today %}<em>{{ t('tt_today') }}</em>{% endif %}</h3>
+      {% for row in week.rows %}{% for x in row.cells[di] %}
+      <div class="tt-list-item"><div class="time"><b>{{ row.period.n }}</b>{{ row.period.start }}<br>{{ row.period.end }}</div>{{ tt_ui.lesson(x, kind) }}</div>
+      {% endfor %}{% endfor %}
+      {% if not d.pairs %}<div class="tt-list-free">—</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+
+<section class="card flush" style="margin-top:22px">
+  <div class="card-h"><div><h2>{{ t('tt_subjects_teachers') if kind == 'group' else t('tt_subjects_groups') }}</h2></div></div>
+  <div class="table-wrap">
+  <table>
+    <thead><tr>
+      <th>{{ t('col_subject') }}</th><th>{{ t('col_type') }}</th>
+      <th>{{ t('col_teachers') if kind == 'group' else t('col_groups') }}</th><th class="r">{{ t('col_pairs') }}</th>
+    </tr></thead>
+    <tbody>
+      {% for r in subjects %}
+      <tr>
+        <td class="wrap"><b class="ink">{{ r.subject }}</b></td>
+        <td>{{ tt_ui.type_label(r.type) }}</td>
+        {% set ids = r.people|list %}
+        <td class="wrap tt-people">{{ person_chips(ids[:12]) }}{% if ids|length > 12 %}
+          <details><summary>+{{ ids|length - 12 }}</summary>{{ person_chips(ids[12:]) }}</details>{% endif %}
+          {%- if not ids %}—{% endif %}</td>
+        <td class="r num">{{ tt_ui.fmt_pairs(r.pairs) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endblock %}

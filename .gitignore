@@ -1,0 +1,20 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.ruff_cache/
+data/real/
+tools/
+data/runtime/
+# Real personal data and uploads - never commit
+talaba_excel.xlsx
+/*.xlsx
+data/uploads/
+data/backups/
+data/media/
+# scripts/backup.sh transfer: secrets + all student data - never commit
+talaba-transfer-*.tar.gz
+*.sql.gz

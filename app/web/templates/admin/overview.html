@@ -1,0 +1,135 @@
+{% extends "admin/base.html" %}
+{% import "admin/_ui.html" as ui with context %}
+{% block title %}{{ t('nav_overview') }}{% endblock %}
+{% block page %}overview{% endblock %}
+{% block heading %}<h1>{{ greeting }}, <b>{{ admin.username }}</b></h1><p>{{ t('overview_sub', campaign=ui.campaign_label()|trim) }}</p>{% endblock %}
+
+{# A share as a ring; hovering it shows the exact numbers. #}
+{% macro ring_kpi(key, pct, tip, about) -%}
+<div class="kpi">
+  <div class="label">{{ t(key) }}{{ ui.info(about) }}</div>
+  <div class="ring-value" data-tip="{{ tip }}" tabindex="0">
+    <span class="dial" style="--p:{{ pct }}" aria-hidden="true"></span>
+    <div class="value">{{ ui.count(pct, pct, 1) }}<small>%</small></div>
+  </div>
+  <div class="foot">{{ t(key ~ '_meta') }}</div>
+</div>
+{%- endmacro %}
+
+{% block content %}
+{{ ui.section('gauge', t('sec_metrics')) }}
+<section class="kpis">
+  <div class="kpi"><div class="label">{{ t('kpi_overall') }}{{ ui.info(t('i_overall')) }}</div>
+    <div class="value">{% if kpis.overall %}{{ ui.count(kpis.overall, '%.2f'|format(kpis.overall), 2) }}<small>/10</small>{% else %}—{% endif %}</div>
+    <div class="foot">{{ ui.delta(deltas.overall) or t('kpi_overall_meta') }}</div></div>
+  <div class="kpi"><div class="label">{{ t('kpi_evaluations') }}{{ ui.info(t('i_evaluations')) }}</div>
+    <div class="value">{{ ui.count(kpis.evaluations, num(kpis.evaluations)) }}</div>
+    <div class="foot">{{ t('teacher_n', n=kpis.teachers_rated) }}</div></div>
+  {{ ring_kpi('kpi_registered', kpis.registered_pct,
+              t('tip_registered', n=num(kpis.registered), total=num(kpis.students)), t('i_registered')) }}
+  {{ ring_kpi('kpi_completed', kpis.completed_pct,
+              t('tip_completed', n=num(kpis.completed), total=num(kpis.students)), t('i_completed')) }}
+  {{ ring_kpi('kpi_comments', kpis.comments_pct,
+              t('tip_comments', n=num(kpis.comments), total=num(kpis.evaluations)), t('i_comments')) }}
+</section>
+
+{{ ui.section('star', t('sec_criteria')) }}
+<section class="card">
+  <div class="card-h"><div><h2>{{ t('crit_title') }}</h2><div class="sub">{{ t('crit_sub') }}</div></div></div>
+  {# Each survey is a snapshot (end of semester, ~10 days), so a card per criterion: the score, the change since the
+     previous survey, and a bar out of 10 with the previous survey marked. #}
+  <div class="metrics">
+    {% for key in ['overall'] + criteria.keys()|list %}{% set p = prev[key] if prev else none %}
+    <div class="metric">
+      <div class="m-label">{{ t('overall') if key == 'overall' else t('cs_' ~ key) }}{{ ui.info(t('kpi_overall_meta') if key == 'overall' else criteria[key]) }}</div>
+      <div class="m-value">{% if kpis[key] is not none %}{{ ui.count(kpis[key], '%.2f'|format(kpis[key]), 2) }}<small>/10</small>{% else %}—{% endif %}
+        {{ ui.delta(deltas[key], chip=true) }}</div>
+      {{ ui.meter(kpis[key], p, loop.index0, t('prev_short', v='%.2f'|format(p)) if p is not none else none) }}
+      <div class="m-note">{{ t('prev_short', v='%.2f'|format(p)) if p is not none else (t('first_survey') if campaign else t('all_surveys_avg')) }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+{{ ui.section('activity', t('sec_activity')) }}
+<section class="grid">
+  <div class="status-card glow span-4">
+    <div class="top">
+      <h2>{{ t('status_card') }}</h2>
+      {% if status %}<span class="state {{ '' if status.open else 'closed' }}">{{ t('status_open') if status.open else t('status_closed') }}</span>
+      {% else %}<span class="state closed">{{ t('all_surveys') }}</span>{% endif %}
+    </div>
+    <div class="lbl">{{ t('participation_now') }}</div>
+    <div class="big" data-tip="{{ t('tip_participation', n=num(kpis.participants), total=num(kpis.students)) }}" tabindex="0">{{ ui.count(kpis.participation_pct, kpis.participation_pct, 1) }}<small>%</small></div>
+    <div class="meta">{% if status %}{{ t('days_left', n=status.days_left) ~ ' · ' ~ t('closes_on', date=status.closes) if status.open else t('closed_on', date=status.closes) }}{% else %}{{ t('of_students', n=num(kpis.participants), total=num(kpis.students)) }}{% endif %}</div>
+    <div id="chart-spark" class="spark"></div>
+  </div>
+  <div class="card span-8">
+    <div class="card-h"><div><h2>{{ t('daily') }}</h2><div class="sub">{{ t('daily_sub') }}</div></div></div>
+    <div id="chart-daily" class="chart" style="height:280px"></div>
+  </div>
+</section>
+
+{{ ui.section('teachers', t('nav_teachers')) }}
+<section class="grid">
+  <div class="card span-7">
+    <div class="card-h"><div><h2>{{ t('ranking') }}</h2><div class="sub" id="rank-sub">{{ t('rank_sub_best') }}</div></div>
+      <div class="seg" id="rank-tabs" role="tablist">
+        {% for m in ['best', 'worst', 'most'] %}<button type="button" role="tab" class="{{ 'on' if loop.first }}" data-m="{{ m }}" data-sub="{{ t('rank_sub_' ~ m) }}" data-tip="{{ t('tip_' ~ m) }}">{{ t('tab_' ~ m) }}</button>{% endfor %}
+      </div></div>
+    {# Top / bottom 10: score bar, then the number of evaluations. Most rated: evaluations bar, then the score. #}
+    {% for m, rows in ranking.items() %}{% set by_n = m == 'most' %}
+    <div class="rank" data-m="{{ m }}" {{ 'hidden' if not loop.first }}>
+      {% if rows %}
+      <div class="rank-h"><span>#</span><span>{{ t('col_teacher') }}</span>
+        <span>{{ t('col_evaluations') if by_n else t('kpi_overall') }}</span><span class="r">{{ t('kpi_overall') if by_n else t('col_evaluations') }}</span></div>
+      {% for x in rows %}
+      <a class="rank-row" href="{{ url('/admin/teachers/' ~ x.id) }}" style="--n:{{ loop.index0 }}">
+        <span class="pos">{{ loop.index }}</span>
+        <span class="name">{{ x.name }}</span>
+        <span class="meter"><span class="track"><i style="width:{{ ((100 * x.n / most_n) if by_n else (10 * x.overall))|round(1) }}%"></i></span>
+          <b>{{ x.n if by_n else '%.2f'|format(x.overall) }}</b></span>
+        <span class="r">{% if by_n %}{{ ui.pill(x.overall) }}{% else %}<span class="count">{{ x.n }}</span>{% endif %}</span>
+      </a>
+      {% endfor %}
+      {% else %}{{ ui.empty('inbox', t('no_data')) }}{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <div class="card span-5">
+    <div class="card-h"><div><h2>{{ t('attention') }}</h2><div class="sub">{{ t('attention_sub') }}</div></div><span class="icon-badge bad">{{ icon('alert') }}</span></div>
+    {% if attention %}<div class="rows">{% for x in attention %}
+      <a href="{{ url('/admin/teachers/' ~ x.id) }}">{{ ui.person(x.name, x.department) }}
+        <span class="end"><span class="sub">{{ x.n }} {{ t('ev_short') }}</span>{{ ui.pill(x.overall) }}</span></a>{% endfor %}</div>
+    {% else %}{{ ui.empty('check', t('attention_none'), 'good') }}{% endif %}
+  </div>
+</section>
+
+{{ ui.section('chart', t('sec_scores')) }}
+<section class="grid">
+  <div class="card span-5">
+    <div class="card-h"><div><h2>{{ t('distribution') }}</h2><div class="sub">{{ t('distribution_sub') }}</div></div></div>
+    <div id="chart-distribution" class="chart" style="height:330px"></div>
+  </div>
+  <div class="card span-7">
+    <div class="card-h"><div><h2>{{ t('specialties') }}</h2><div class="sub">{{ t('specialties_sub') }}</div></div>
+      <div class="legend">{% for key, label in criteria.items() %}<span data-tip="{{ label }}"><i style="background:var(--s{{ loop.index }})"></i>{{ t('cs_' ~ key) }}</span>{% endfor %}</div></div>
+    <div id="chart-specialties" class="chart" style="height:330px"></div>
+  </div>
+</section>
+
+{{ ui.section('message', t('comments')) }}
+<section class="card">
+  <div class="card-h"><div><h2>{{ t('comments') }}</h2></div>
+    <a class="act" href="{{ url('/admin/comments') }}" data-tip="{{ t('tip_view_all') }}">{{ t('view_all') }}<span class="arr">→</span></a></div>
+  <div class="comments">
+    {% for c in comments %}
+    <div class="comment">
+      <div><div class="head"><a href="{{ url('/admin/teachers/' ~ c.teacher_id) }}">{{ c.teacher }}</a>
+        <span class="sub">{% if show_who %}{{ c.student }} · {% endif %}{{ c.group }} · {{ c.date }}</span></div><p>{{ c.comment }}</p></div>
+      <div>{{ ui.pill(c.overall) }}</div>
+    </div>
+    {% else %}{{ ui.empty('message', t('comments_none')) }}{% endfor %}
+  </div>
+</section>
+{% endblock %}

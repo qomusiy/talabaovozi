@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="uz">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f4f5f9">
+  <meta name="robots" content="noindex">
+  <title>Talaba Ovozi · Statistika</title>
+  <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/fonts.css?v=6">
+  <link rel="stylesheet" href="/static/miniapp.css?v=2">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>
+    (function () {
+      var tg = window.Telegram && window.Telegram.WebApp;
+      var dark = tg && tg.initData ? tg.colorScheme === "dark"
+        : window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.dataset.theme = dark ? "dark" : "light";
+    })();
+  </script>
+</head>
+<body>
+  <main class="wrap" id="app" aria-busy="true">
+    <div class="sk" style="height:22px;width:40%;margin:22px 0 8px"></div>
+    <div class="sk" style="height:150px;margin-top:16px"></div>
+    <div class="grid2"><div class="sk" style="height:84px"></div><div class="sk" style="height:84px"></div>
+      <div class="sk" style="height:84px"></div><div class="sk" style="height:84px"></div></div>
+  </main>
+  <script>window.MINI_TEXTS = {{ texts | tojson }};</script>
+  <script src="/static/miniapp.js?v=1"></script>
+</body>
+</html>

@@ -1,0 +1,52 @@
+{# Small reusable pieces. Import with: {% import "admin/_ui.html" as ui with context %} #}
+
+{# Change vs the previous survey. Changes below the threshold are neutral, so noise isn't painted red/green. #}
+{% macro delta(d, pp=false, chip=false, tip=none) -%}
+  {%- if d is defined and d is not none -%}
+    {%- set limit = 0.5 if pp else 0.05 -%}
+    {%- set cls = 'up' if d >= limit else ('down' if d <= -limit else 'flat') -%}
+    <span class="delta {{ cls }} {{ 'chip' if chip }}" data-tip="{{ tip or t('tip_delta') }}">{{ '▲' if cls == 'up' else ('▼' if cls == 'down' else '•') }}
+      {{ ('%+.1f'|format(d) ~ ' ' ~ t('pp')) if pp else '%+.2f'|format(d) }}</span>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro pill(v) -%}
+  <span class="pill {{ band(v) }}">{{ '%.2f'|format(v) if v is not none else '—' }}</span>
+{%- endmacro %}
+
+{% macro person(name, sub=none, href=none) -%}
+  <div class="person"><div class="who">{% if href %}<a href="{{ href }}"><b>{{ name }}</b></a>{% else %}<b>{{ name }}</b>{% endif %}
+      {%- if sub %}<span>{{ sub }}</span>{% endif %}</div></div>
+{%- endmacro %}
+
+{% macro empty(icon_name, text, cls='') -%}
+  <div class="empty {{ cls }}"><span class="ico">{{ icon(icon_name) }}</span>{{ text }}</div>
+{%- endmacro %}
+
+{% macro campaign_label() -%}
+  {{ (campaign.semester.name ~ ' · ' ~ campaign.title) if campaign else t('all_surveys') }}
+{%- endmacro %}
+
+{# Autosend-style section header: icon + mono label + hairline #}
+{% macro section(icon_name, label) -%}
+  <div class="section-h">{{ icon(icon_name) }}<span>{{ label }}</span></div>
+{%- endmacro %}
+
+{# A small (i) that explains a number on hover #}
+{% macro info(text) -%}
+  <span class="i-tip" data-tip="{{ text }}" tabindex="0" aria-label="{{ text }}">{{ icon('info') }}</span>
+{%- endmacro %}
+
+{# A number that counts up on load (admin.js); the final text is already in the page. #}
+{% macro count(value, text=none, decimals=0) -%}
+  <span data-count="{{ value }}" data-decimals="{{ decimals }}">{{ text if text is not none else value }}</span>
+{%- endmacro %}
+
+{# A score out of 10 as a slim bar in the criterion's colour (0 = overall, in ink), with a comparison marked
+   (the previous survey, or the faculty average). #}
+{% macro meter(value, compare=none, series=0, compare_tip=none) -%}
+  <div class="meter" style="--c: var({{ '--ink' if not series else '--s' ~ series }})">
+    <span class="fill" style="--w: {{ ((value or 0) * 10)|round(1) }}%"></span>
+    {%- if compare is not none %}<span class="mark" style="--x: {{ (compare * 10)|round(1) }}%" data-tip="{{ compare_tip }}"></span>{% endif %}
+  </div>
+{%- endmacro %}

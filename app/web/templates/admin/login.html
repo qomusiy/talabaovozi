@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ t('login_title') }} · Talaba Ovozi</title>
+  <link rel="icon" href="/static/logo-admin.svg" type="image/svg+xml">
+  <link rel="preload" href="/static/vendor/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/static/fonts-admin.css?v=1">
+  <link rel="stylesheet" href="/static/login.css?v=9">
+</head>
+<body>
+<div class="auth">
+  <aside class="panel">
+    <div class="logo-row"><div><b>Talaba Ovozi</b><span>{{ t('brand_sub') }} · TIIAME</span></div></div>
+    <div class="pitch">
+      <h1>{{ t('pitch_title') }}</h1>
+      <p>{{ t('pitch_text') }}</p>
+      <ul class="features">
+        <li><span class="fi">{{ icon('chart') }}</span>{{ t('feature_1') }}</li>
+        <li><span class="fi">{{ icon('groups') }}</span>{{ t('feature_2') }}</li>
+        <li><span class="fi">{{ icon('message') }}</span>{{ t('feature_3') }}</li>
+      </ul>
+      <div class="mock" aria-hidden="true">
+        <i style="height:38%"></i><i style="height:55%"></i><i style="height:47%"></i><i style="height:68%"></i>
+        <i style="height:61%"></i><i style="height:79%"></i><i style="height:72%"></i><i style="height:90%"></i>
+      </div>
+    </div>
+    <div class="foot">© {{ year }} Talaba Ovozi</div>
+  </aside>
+
+  <main class="side">
+    <details class="lang" id="lang-menu">
+      <summary aria-label="{{ t('language') }}: {{ langs[lang] }}" title="{{ t('tip_lang') }}">{{ icon('globe') }}<span>{{ langs[lang] }}</span>{{ icon('chevron_down', 'caret') }}</summary>
+      <div class="menu">
+        {% for code in langs %}<a href="/admin/lang/{{ code }}?next={{ current_url }}" class="{{ 'on' if code == lang }}" hreflang="{{ code }}" lang="{{ code }}" {% if code == lang %}aria-current="true"{% endif %}>
+          <span class="code">{{ code | upper }}</span>{{ langs[code] }}{% if code == lang %}{{ icon('check', 'tick') }}{% endif %}</a>{% endfor %}
+      </div>
+    </details>
+    <form class="form" method="post" action="/admin/login" id="login-form">
+      <div class="logo-row mobile-logo"><div><b>Talaba Ovozi</b><span>{{ t('brand_sub') }}</span></div></div>
+      <h2>{{ t('login_title') }}</h2>
+      <p class="lead">{{ t('login_lead') }}</p>
+      {% if error %}<div class="alert" role="alert">{{ icon('circle_alert') }}{{ error }}</div>{% endif %}
+      <input type="hidden" name="next" value="{{ next }}">
+      <div class="field">
+        <label for="username">{{ t('username') }}</label>
+        <div class="control">{{ icon('user') }}
+          <input id="username" type="text" name="username" value="{{ username or '' }}" autocomplete="username" required {{ '' if username else 'autofocus' }}>
+        </div>
+      </div>
+      <div class="field">
+        <label for="password">{{ t('password') }}</label>
+        <div class="control">{{ icon('lock') }}
+          <input id="password" type="password" name="password" autocomplete="current-password" required {{ 'autofocus' if username }}>
+          <button type="button" class="toggle" id="toggle-pw" aria-label="{{ t('show_password') }}" title="{{ t('show_password') }}">{{ icon('eye') }}</button>
+        </div>
+      </div>
+      <button class="submit" type="submit" id="submit" data-busy="{{ t('signing_in') }}">{{ t('sign_in') }}{{ icon('arrow_right') }}</button>
+      <div class="help">{{ icon('info') }}<span>{{ help }}</span></div>
+    </form>
+  </main>
+</div>
+<script>
+  const pw = document.getElementById("password");
+  document.getElementById("toggle-pw").addEventListener("click", (e) => {
+    const show = pw.type === "password";
+    pw.type = show ? "text" : "password";
+    e.currentTarget.classList.toggle("on", show);
+  });
+  const lang = document.getElementById("lang-menu");
+  document.addEventListener("click", (e) => { if (lang.open && !lang.contains(e.target)) lang.open = false; });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && lang.open) lang.open = false; });
+  document.getElementById("login-form").addEventListener("submit", () => {
+    const b = document.getElementById("submit");
+    b.disabled = true;
+    b.innerHTML = '<span class="spin"></span>' + b.dataset.busy;
+  });
+</script>
+</body>
+</html>

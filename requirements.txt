@@ -1,0 +1,24 @@
+# Telegram bot
+aiogram>=3.31
+
+# Web (survey + dashboard)
+fastapi
+uvicorn[standard]
+jinja2
+itsdangerous
+python-multipart
+httpx             # EduPage timetable download
+
+# Database
+sqlalchemy[asyncio]>=2.0
+asyncpg
+alembic
+# Config
+pydantic-settings
+# Excel
+openpyxl
+# Pictures the bot sends (timetable, menu card)
+pillow>=11
+# Tests
+pytest
+pytest-asyncio

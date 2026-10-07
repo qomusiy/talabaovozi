@@ -1,0 +1,61 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ t('nav_account') }}{% endblock %}
+{% block page %}account{% endblock %}
+{% block campaign_select %}{% endblock %}
+{% block heading %}<h1 class="plain">{{ t('nav_account') }}</h1><p>{{ admin.username }} · {{ t('role_' ~ admin.role) }}</p>{% endblock %}
+{% block content %}
+<section class="card narrow-card">
+  <div class="card-h"><div><h2>{{ t('acc_sub') }}</h2></div></div>
+  <form method="post" action="/admin/account/password" class="form">
+    <label class="field"><span class="lbl">{{ t('acc_current') }}</span><input type="password" name="current" required autocomplete="current-password"></label>
+    <label class="field"><span class="lbl">{{ t('acc_new') }}</span><input type="password" name="new" required minlength="8" autocomplete="new-password"></label>
+    <label class="field"><span class="lbl">{{ t('acc_repeat') }}</span><input type="password" name="repeat" required minlength="8" autocomplete="new-password"></label>
+    <button class="btn primary" type="submit">{{ icon('key') }}{{ t('acc_save') }}</button>
+  </form>
+</section>
+<section class="card narrow-card tg-card" id="telegram">
+  <div class="card-h"><div><h2>{{ t('tg_title') }}</h2><div class="sub">{{ t('tg_sub') }}</div></div>
+    {% if admin.telegram_id %}<span class="badge good">{{ t('tg_linked_badge') }}</span>{% endif %}</div>
+  {% if admin.telegram_id %}
+  <div class="tg-linked">{{ icon('check') }}<span>{{ t('tg_linked_as') }} <b>{{ admin.telegram_name or '—' }}</b>{% if admin.telegram_username %} · @{{ admin.telegram_username }}{% endif %}
+    <span class="muted">· ID {{ admin.telegram_id }}</span></span></div>
+  <ul class="tg-can">{% for k in ['tg_can_links', 'tg_can_stats', 'tg_can_app', 'tg_can_daily'] %}<li>{{ t(k) }}</li>{% endfor %}</ul>
+  <div class="pub-row">
+    {% if bot_username %}<a class="btn primary" href="https://t.me/{{ bot_username }}" target="_blank" rel="noopener">{{ icon('external') }}{{ t('tg_open_bot') }}</a>{% endif %}
+    <form method="post" action="/admin/account/telegram/unlink" data-confirm="{{ t('tg_unlink_confirm') }}">
+      <button class="btn ghost" type="submit">{{ icon('x') }}{{ t('tg_unlink') }}</button></form>
+  </div>
+  {% else %}
+  <div class="tg-way">
+    <b>{{ t('tg_way1') }}</b><span class="hint">{{ t('tg_way1_hint') }}</span>
+    {% if tg_token %}
+      <div class="tg-token">
+        {% if tg_link %}<a class="btn primary" href="{{ tg_link }}" target="_blank" rel="noopener">{{ icon('send') }}{{ t('tg_open_link') }}</a>{% endif %}
+        <code>{{ tg_link or ('/start ' ~ tg_token) }}</code>
+        <span class="hint">{{ t('tg_link_until', time=tg_until) }}</span>
+      </div>
+    {% else %}
+      <form method="post" action="/admin/account/telegram/link"><button class="btn primary" type="submit">{{ icon('link') }}{{ t('tg_get_link') }}</button></form>
+    {% endif %}
+  </div>
+  <div class="tg-way">
+    <b>{{ t('tg_way2') }}</b><span class="hint">{{ t('tg_way2_hint', bot=('@' ~ bot_username) if bot_username else t('tg_the_bot')) }}</span>
+    <form method="post" action="/admin/account/telegram/username" class="pub-row">
+      <input type="text" name="telegram_username" value="{{ '@' ~ admin.telegram_username if admin.telegram_username else '' }}" placeholder="@username" maxlength="40" aria-label="Telegram username">
+      <button class="btn" type="submit">{{ t('save') }}</button>
+    </form>
+    {% if admin.telegram_username %}<span class="hint">{{ icon('clock') }} {{ t('tg_waiting', value=admin.telegram_username) }}</span>{% endif %}
+  </div>
+  {% endif %}
+</section>
+<section class="card narrow-card">
+  <div class="card-h"><div><h2>{{ t('dp_title') }}</h2><div class="sub">{{ t('dp_sub') }}</div></div></div>
+  <ul class="dp-summary">
+    <li>{{ icon('type') }}<span>{{ t('dp_text') }}: <b>{{ t('dp_size_' ~ display.text) }}</b></span></li>
+    <li>{{ icon('monitor' if display.theme == 'auto' else 'sun' if display.theme == 'light' else 'moon') }}<span>{{ t('dp_theme') }}: <b>{{ t('dp_theme_' ~ display.theme) }}</b></span></li>
+    {% for key in ['contrast', 'motion', 'spacing', 'links'] %}{% if display[key] %}<li>{{ icon('check') }}<span>{{ t('dp_' ~ key) }}</span></li>{% endif %}{% endfor %}
+    {% if not show_who %}<li>{{ icon('eye_off') }}<span>{{ t('dp_hide_names') }}</span></li>{% endif %}
+  </ul>
+  <button class="btn" type="button" data-open-display>{{ icon('text_size') }}{{ t('dp_open') }}</button>
+</section>
+{% endblock %}

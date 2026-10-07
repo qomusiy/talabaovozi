@@ -1,0 +1,196 @@
+{% extends "admin/base.html" %}
+{% import "admin/_ui.html" as ui with context %}
+{% block title %}{{ t('nav_bot') }}{% endblock %}
+{% block page %}bot{% endblock %}
+{% block campaign_select %}{% endblock %}
+{% block heading %}<h1 class="plain">{{ t('nav_bot') }}{% if status.username %} <span class="muted h-sub">@{{ status.username }}</span>{% endif %}</h1><p>{{ t('bot_sub') }}</p>{% endblock %}
+{% block content %}
+<section class="kpis">
+  <div class="kpi"><div class="label">{{ t('bot_status') }}</div>
+    <div class="value"><span class="live {{ 'on' if status.online else 'off' }}"></span>{{ t('bot_online') if status.online else t('bot_offline') }}</div>
+    <div class="foot">{{ t('bot_seen', date=status.seen) if status.seen else t('bot_never') }}</div></div>
+  <div class="kpi"><div class="label">{{ t('bot_in_bot') }}</div><div class="value">{{ num(in_bot) }}</div>
+    <div class="foot">{{ t('set_login_open') if settings.login_open else t('login_closed_short') }}</div></div>
+  <div class="kpi"><div class="label">{{ t('bot_round') }}</div>
+    <div class="value small-value">{{ open_round.title if open_round else '—' }}</div>
+    <div class="foot">{% if open_round %}{{ t('closes_on', date=local_time(open_round.closes_at, '%d.%m.%Y')) }}{% else %}<a class="link" href="/admin/surveys">{{ t('bot_round_none') }} →</a>{% endif %}</div></div>
+  <div class="kpi"><div class="label">{{ t('bot_public') }}</div>
+    <div class="value"><span class="live {{ 'on' if tunnel.state == 'ok' else 'off' }}"></span>{{ t('tun_' ~ tunnel.state) }}</div>
+    <div class="foot">{% if tunnel.ago_min is not none %}{{ t('tun_checked', n=tunnel.ago_min) }}{% else %}{{ t('bot_no_public') if not public_url else '' }}{% endif %}</div></div>
+</section>
+
+{# The public address: what it is, whether it works, and the two things the admin can do about it. #}
+<section class="card public-card">
+  <div class="card-h"><div><h2>{{ t('tun_title') }}</h2><div class="sub">{{ t('tun_sub') }}</div></div>
+    <span class="state-pill {{ tunnel.state }}">{{ t('tun_' ~ tunnel.state) }}</span></div>
+  <div class="pub-row">
+    <code class="url">{{ public_url or '—' }}</code>
+    {% if public_url %}<a class="btn sm" href="{{ public_url }}/survey" target="_blank" rel="noopener" data-tip="{{ t('tun_open_tip') }}">{{ icon('external') }}{{ t('tun_open') }}</a>{% endif %}
+    {% if not tunnel.fixed %}<form method="post" action="/admin/bot/tunnel" data-confirm="{{ t('tun_new_confirm') }}">
+      <button class="btn sm" type="submit" data-tip="{{ t('tun_new_tip') }}">{{ icon('refresh') }}{{ t('tun_new') }}</button></form>{% endif %}
+  </div>
+  <p class="hint">{{ t('tun_how_fixed') if tunnel.fixed else t('tun_how') }}</p>
+  <form method="post" action="/admin/bot/online" class="online-form">
+    <label class="switch-row"><span class="switch"><input type="checkbox" name="admin_online" value="true" onchange="this.form.requestSubmit()" {{ 'checked' if settings.admin_online }}></span>
+      <span><b>{{ t('online_title') }}</b><span class="hint">{{ t('online_hint') }}{% if settings.admin_online and public_url %} <a class="link" href="{{ public_url }}/admin" target="_blank" rel="noopener">{{ public_url }}/admin</a>{% endif %}</span></span></label>
+  </form>
+</section>
+
+<section class="grid">
+  <div class="card span-7">
+    <div class="card-h"><div><h2>{{ t('bc_title') }}</h2><div class="sub">{{ t('bc_sub') }}</div></div></div>
+    <form method="post" action="/admin/bot/broadcast" class="form" id="bc-form" enctype="multipart/form-data" data-confirm="{{ t('bc_send_confirm') }}">
+      <label class="field"><span class="lbl">{{ t('bc_text') }}</span>
+        <textarea name="text" id="bc-text" rows="5" maxlength="3500" placeholder="{{ t('bc_text_ph') }}"></textarea>
+        <span class="hint" id="bc-len" data-long="{{ t('bc_long_caption') }}"></span></label>
+
+      <div class="field"><span class="lbl">{{ t('bc_media') }}</span>
+        <label class="drop" id="bc-drop">
+          <input type="file" name="media" id="bc-media" accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip">
+          {{ icon('upload') }}<span><b>{{ t('bc_media_pick') }}</b><small>{{ t('bc_media_hint') }}</small></span></label>
+        <div class="drop-file" id="bc-file" hidden>{{ icon('paperclip') }}<span class="name"></span><span class="muted size"></span>
+          <button type="button" class="btn sm ghost" id="bc-file-x" data-tip="{{ t('bc_media_remove') }}" aria-label="{{ t('bc_media_remove') }}">{{ icon('x') }}</button></div>
+      </div>
+
+      <div class="form-grid two">
+        <label class="field"><span class="lbl">{{ t('bc_audience') }}</span>
+          <select name="audience" id="bc-audience">
+            {% for a in ['all', 'course', 'group', 'department', 'specialty'] %}<option value="{{ a }}">{{ t('aud_' ~ a) }}</option>{% endfor %}
+          </select></label>
+        <label class="field"><span class="lbl">{{ t('bc_survey') }}</span>
+          <select name="survey" id="bc-survey" {{ 'disabled' if not open_round }}>
+            <option value="">{{ t('bc_survey_any') }}</option>
+            <option value="unfinished">{{ t('bc_survey_unfinished') }}</option>
+            <option value="finished">{{ t('bc_survey_finished') }}</option>
+          </select>
+          {% if not open_round %}<span class="hint">{{ t('bc_survey_closed') }}</span>{% endif %}</label>
+      </div>
+
+      {# One list per audience; only the chosen one is sent (the others are switched off by admin.js). #}
+      <div class="picker" data-aud="course" hidden>
+        <div class="chips-pick">{% for c in courses %}<label class="pick-chip"><input type="checkbox" name="values" value="{{ c }}" disabled><span>{{ t('course_n', n=c) }}</span></label>{% endfor %}</div>
+      </div>
+      <div class="picker" data-aud="specialty" hidden>
+        <div class="chips-pick">{% for code in specialties %}<label class="pick-chip"><input type="checkbox" name="values" value="{{ code }}" disabled><span>{{ specialty(code) }}</span></label>{% endfor %}</div>
+      </div>
+      <div class="picker" data-aud="group" hidden>
+        <div class="pick-head"><input type="search" class="pick-search" placeholder="{{ t('bc_pick_search') }}" aria-label="{{ t('bc_pick_search') }}">
+          <span class="muted pick-n" data-text="{{ t('bc_picked') }}"></span></div>
+        <div class="pick-list">
+          {% for course, items in groups|groupby('course') %}
+          <div class="pick-group"><div class="pick-label">{{ t('course_n', n=course) if course else '—' }}</div>
+            {% for g in items %}<label class="pick-row"><input type="checkbox" name="values" value="{{ g.id }}" disabled><span>{{ g.name }}</span></label>{% endfor %}</div>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="picker" data-aud="department" hidden>
+        <div class="pick-head"><input type="search" class="pick-search" placeholder="{{ t('bc_pick_search') }}" aria-label="{{ t('bc_pick_search') }}">
+          <span class="muted pick-n" data-text="{{ t('bc_picked') }}"></span></div>
+        <div class="pick-list">{% for d in departments %}<label class="pick-row"><input type="checkbox" name="values" value="{{ d.id }}" disabled><span>{{ d.name }}</span></label>{% endfor %}</div>
+        <span class="hint">{{ t('bc_department_hint') }}</span>
+      </div>
+
+      <label class="check"><input type="checkbox" name="survey_button" id="bc-button" value="true" {{ 'checked' if open_round }}>{{ t('bc_button') }}</label>
+
+      <div class="bc-preview">
+        <div class="lbl">{{ t('bc_preview') }}</div>
+        <div class="tg-wall"><div class="tg-msg in">
+          <div class="tg-bubble">
+            <img class="tg-photo" id="pv-img" alt="" hidden>
+            <div class="tg-doc" id="pv-doc" hidden>{{ icon('paperclip') }}<span></span></div>
+            <div class="tg-text" id="pv-text" data-empty="{{ t('bc_preview_empty') }}"></div>
+            <span class="tg-time">{{ now_hm }}</span>
+          </div>
+          <div class="tg-btns" id="pv-btn"><span>📝 Baholashni boshlash</span></div>
+        </div></div>
+      </div>
+
+      <div class="form-foot"><span class="muted" id="bc-count"></span>
+        <button class="btn" type="button" id="bc-test" data-tip="{{ t('bc_test_tip') }}" data-busy="{{ t('bc_test_busy') }}">{{ icon('eye') }}{{ t('bc_test') }}</button>
+        <button class="btn primary" type="submit" data-tip="{{ t('tip_bc_send') }}">{{ icon('send') }}{{ t('bc_send') }}</button></div>
+    </form>
+  </div>
+
+  <div class="card span-5">
+    <div class="card-h"><div><h2>{{ t('bot_settings') }}</h2><div class="sub">{{ t('bot_settings_sub') }}</div></div></div>
+    <form method="post" action="/admin/bot/settings" class="form">
+      {% for key in ['login_open', 'survey_comments', 'survey_comment_required', 'survey_edit', 'reminders', 'bot_reactions'] %}
+      {% set label = {'login_open': 'set_login_open', 'survey_comments': 'set_comments', 'survey_edit': 'set_edit',
+                      'survey_comment_required': 'set_comment_required',
+                      'reminders': 'set_reminders', 'bot_reactions': 'set_reactions'}[key] %}
+      <label class="switch-row"><span class="switch"><input type="checkbox" name="{{ key }}" value="true" {{ 'checked' if settings[key] }}></span>
+        <span><b>{{ t(label) }}</b><span class="hint">{{ t(label ~ '_hint') }}</span></span></label>
+      {% endfor %}
+      <label class="field"><span class="lbl">{{ t('set_channel') }}</span>
+        <input type="text" name="channel_url" value="{{ settings.channel_url }}" placeholder="https://t.me/iqtisodiyot_uz1" maxlength="128">
+        <span class="hint">{{ t('set_channel_hint') }}</span></label>
+      <label class="field"><span class="lbl">{{ t('set_notice') }}</span>
+        <textarea name="survey_notice" rows="2" maxlength="500">{{ settings.survey_notice }}</textarea>
+        <span class="hint">{{ t('set_notice_hint') }}</span></label>
+      <div class="form-grid two">
+        <label class="field"><span class="lbl">{{ t('set_support') }}</span>
+          <input type="text" name="support_contact" value="{{ settings.support_contact }}" placeholder="{{ env.support_contact }}" maxlength="64"></label>
+        <label class="field"><span class="lbl">{{ t('set_tech') }}</span>
+          <input type="text" name="tech_contact" value="{{ settings.tech_contact }}" placeholder="{{ env.tech_contact }}" maxlength="64"></label>
+      </div>
+      <label class="field"><span class="lbl">{{ t('set_admin_ids') }}</span>
+        <input type="text" name="admin_telegram_ids" value="{{ settings.admin_telegram_ids|join(', ') }}" placeholder="123456789">
+        <span class="hint">{{ t('set_admin_ids_hint') }}</span></label>
+      <button class="btn primary" type="submit" data-tip="{{ t('tip_save') }}">{{ t('save') }}</button>
+    </form>
+  </div>
+</section>
+
+{# The bot's menu card: how it looks in Telegram, and the picture on top of it. #}
+<section class="card menu-card" id="menu-photo">
+  <div class="card-h"><div><h2>{{ t('mp_title') }}</h2><div class="sub">{{ t('mp_sub') }}</div></div>
+    <span class="badge {{ 'good' if menu_custom else 'neutral' }}">{{ t('mp_custom') if menu_custom else t('mp_demo') }}</span></div>
+  <div class="menu-grid">
+    <div class="tg-wall phone"><div class="tg-msg in">
+      <div class="tg-bubble">
+        <img class="tg-photo" src="/admin/bot/menu-photo?v={{ menu_stamp }}" alt="{{ t('mp_title') }}">
+        <div class="tg-text">👋 <b>{{ t('mp_sample_hi') }}</b><br>🎓 23-01 IQT<br><br>🕊 {{ t('mp_sample_status') }}</div>
+        <span class="tg-time">{{ now_hm }}</span>
+      </div>
+      <div class="tg-btns"><span>📅 Dars jadvali</span><span>👨‍🏫 O‘qituvchilarim</span></div>
+      <div class="tg-btns"><span>👤 Profil</span><span>🌐 Til</span></div>
+      <div class="tg-btns"><span>❓ Yordam</span>{% if settings.channel_url %}<span>📢 Fakultet kanali ↗</span>{% endif %}</div>
+    </div></div>
+    <div class="menu-side">
+      <ul class="mp-facts">
+        <li>{{ icon('image') }}<span>{{ t('mp_size') }}</span></li>
+        <li>{{ icon('folder') }}<span>{{ t('mp_where') }} <code>data/media/menu.jpg</code></span></li>
+        <li>{{ icon('refresh') }}<span>{{ t('mp_when') }}</span></li>
+      </ul>
+      <form method="post" action="/admin/bot/menu-photo" enctype="multipart/form-data" class="pub-row">
+        <label class="btn primary file-btn">{{ icon('upload') }}{{ t('mp_upload') }}
+          <input type="file" name="photo" accept="image/jpeg,image/png,image/webp" required onchange="this.form.requestSubmit()"></label>
+      </form>
+      {% if menu_custom %}
+      <form method="post" action="/admin/bot/menu-photo/reset" data-confirm="{{ t('mp_reset_confirm') }}">
+        <button class="btn sm ghost" type="submit">{{ icon('x') }}{{ t('mp_reset') }}</button></form>
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+<section class="card flush" {% if sending %}data-refresh="4"{% endif %}>
+  <div class="card-h"><div><h2>{{ t('bc_history') }}</h2></div></div>
+  {% if history %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{ t('col_when') }}</th><th>{{ t('col_message') }}</th><th>{{ t('col_audience') }}</th>
+      <th class="r">{{ t('col_delivered') }}</th><th>{{ t('col_status') }}</th><th>{{ t('col_by') }}</th></tr></thead>
+    <tbody>
+      {% for b in history %}
+      <tr><td class="num">{{ local_time(b.created_at) }}</td>
+        <td class="wrap" title="{{ b.text }}">{% if b.media_kind %}<span class="media-tag" data-tip="{{ t('bc_kind_' ~ b.media_kind) }}">{{ icon({'photo': 'image', 'video': 'video', 'document': 'paperclip'}[b.media_kind]) }}</span>{% endif %}{{ b.text|truncate(90) if b.text else t('bc_kind_' ~ b.media_kind) }}</td>
+        <td>{{ audiences[b.id] }}</td>
+        <td class="r num">{{ b.sent }} / {{ b.total }}{% if b.failed %}<div class="muted small">{{ t('bc_failed', n=b.failed) }}</div>{% endif %}</td>
+        <td><span class="badge {{ {'done': 'good', 'sending': 'warn', 'queued': 'warn', 'stopped': 'bad'}.get(b.status, 'neutral') }}">{{ t('bc_st_' ~ b.status) }}</span></td>
+        <td>{{ t('system_user') if b.created_by in hidden_users else (b.created_by or '—') }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}{{ ui.empty('send', t('bc_none')) }}{% endif %}
+</section>
+{% endblock %}

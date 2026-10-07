@@ -1,0 +1,121 @@
+{% extends "admin/base.html" %}
+{% import "admin/_ui.html" as ui with context %}
+{% import "admin/_timetable.html" as tt_ui with context %}
+{% block title %}{{ t('tt_title') }}{% endblock %}
+{% block page %}timetable{% endblock %}
+{% block campaign_select %}{% endblock %}
+{% block heading %}
+<h1 class="plain">{{ t('tt_title') }}</h1>
+<p>{% if tt %}{{ t('tt_source', title=tt.title) }} · {{ t('tt_updated', date=updated) }}{% else %}EduPage{% endif %}</p>
+{% endblock %}
+{% block actions %}
+{% if tt and tt.source.startswith('http') %}<a class="btn" href="{{ tt.source }}" target="_blank" rel="noopener" data-tip="{{ t('tip_edupage') }}">{{ icon('external') }}EduPage</a>{% endif %}
+{% if is_super %}{{ tt_ui.sync_button() }}{% endif %}
+{% endblock %}
+
+{% block content %}
+{% if not tt %}
+<section class="card">
+  <div class="empty tt-empty"><span class="ico">{{ icon('timetable') }}</span>
+    <b>{{ t('tt_empty') }}</b><span>{{ t('tt_empty_hint') }}</span>{% if is_super %}{{ tt_ui.sync_button() }}{% endif %}</div>
+</section>
+{% else %}
+
+<section class="kpis">
+  <div class="kpi"><div class="label">{{ t('tt_k_groups') }}</div><div class="value">{{ summary.groups }}</div>
+    <div class="foot">{% for course, groups in courses %}{{ t('course_n', n=course) if course else '?' }}: {{ groups|length }}{{ ' · ' if not loop.last }}{% endfor %}</div></div>
+  <div class="kpi"><div class="label">{{ t('tt_k_teachers') }}</div><div class="value">{{ summary.teachers }}</div>
+    <div class="foot">{{ t('tt_k_teachers_idx_meta') }}</div></div>
+  <div class="kpi"><div class="label">{{ t('tt_k_pairs') }}</div><div class="value">{{ num(summary.pairs|round|int) }}</div>
+    <div class="foot">{{ t('tt_k_pairs_meta') }}</div></div>
+  <div class="kpi"><div class="label">{{ t('tt_k_subjects') }}</div><div class="value">{{ summary.subjects }}</div>
+    <div class="foot">{{ t('tt_mix') }}: {{ mix|length }}</div></div>
+  <div class="kpi"><div class="label">{{ t('tt_k_unscheduled') }}</div>
+    <div class="value {{ 'warn-text' if tt.unscheduled }}">{{ tt.unscheduled }}</div>
+    <div class="foot">{{ t('tt_k_unscheduled_meta') }}</div></div>
+</section>
+
+<section class="grid">
+  <div class="card span-8">
+    <div class="card-h"><div><h2>{{ t('tt_heatmap') }}</h2><div class="sub">{{ t('tt_heatmap_sub') }}</div></div></div>
+    <div id="chart-load" class="chart" style="height:330px"></div>
+  </div>
+  <div class="card span-4">
+    <div class="card-h"><div><h2>{{ t('tt_mix') }}</h2><div class="sub">{{ t('tt_mix_sub') }}</div></div></div>
+    {{ tt_ui.mix_block(mix) }}
+  </div>
+</section>
+
+<section class="card flush">
+  <div class="card-h tt-index-h">
+    <nav class="tabs" aria-label="{{ t('tt_title') }}">
+      <a href="{{ url('/admin/timetable', tab='groups') }}" class="{{ 'on' if tab == 'groups' }}">{{ t('tt_k_groups') }}<span class="count">{{ summary.groups }}</span></a>
+      <a href="{{ url('/admin/timetable', tab='teachers') }}" class="{{ 'on' if tab == 'teachers' }}">{{ t('tt_k_teachers') }}<span class="count">{{ summary.teachers }}</span></a>
+    </nav>
+    <div class="toolbar">
+      {% if tab == 'groups' %}
+      <label class="input">{{ icon('search') }}<input type="search" id="tile-search" placeholder="{{ t('tt_search_groups') }}" aria-label="{{ t('search') }}"></label>
+      <label class="select">{{ icon('book') }}
+        <select id="tile-specialty" aria-label="{{ t('tt_specialty') }}">
+          <option value="">{{ t('tt_all_specialties') }}</option>
+          {% for code, name in specialties %}<option value="{{ code }}">{{ name }}</option>{% endfor %}
+        </select></label>
+      <div class="seg" id="tile-course" role="group" aria-label="{{ t('col_course') }}">
+        <button type="button" class="on" data-course="">{{ t('tt_all_courses') }}</button>
+        {% for course, _ in courses %}<button type="button" data-course="{{ course }}">{{ t('course_n', n=course) if course else '?' }}</button>{% endfor %}
+      </div>
+      {% else %}
+      <label class="input">{{ icon('search') }}<input type="search" id="table-search" placeholder="{{ t('tt_search_teachers') }}" aria-label="{{ t('search') }}"></label>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if tab == 'groups' %}
+  <div class="tt-courses" id="tiles">
+    {% for course, groups in courses %}
+    <div class="tt-course" data-course="{{ course }}">
+      <div class="tt-course-h"><h3>{{ t('course_n', n=course) if course else '?' }}</h3><span>{{ t('tt_groups_in_course', n=groups|length) }}</span></div>
+      <div class="tt-tiles">
+        {% for g in groups %}
+        <a class="tt-tile" href="{{ url('/admin/timetable/group/' ~ g.id) }}" data-q="{{ g.name|lower }}" data-spec="{{ g.specialty }}" data-tip="{{ specialty(g.specialty) }}">
+          <b>{{ g.name }}</b>
+          <span class="meta">
+            {% if g.lang != 'uz' %}<span class="tag" title="{{ t('tt_lang_' ~ g.lang) }}">{{ g.lang|upper }}</span>{% endif %}
+            {% if g.note %}<span class="tag muted">{{ g.note }}</span>{% endif %}
+            <span>{{ t('tt_pairs_week', n=tt_ui.fmt_pairs(g.pairs)) }}</span>
+          </span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+    <div class="empty" id="tiles-empty" hidden>{{ t('tt_no_match') }}</div>
+  </div>
+  {% else %}
+  <div class="table-wrap">
+  <table id="data-table">
+    <thead><tr>
+      <th class="sortable asc" data-type="text">{{ t('col_teacher') }}</th>
+      <th class="sortable r" data-type="num">{{ t('col_pairs') }}</th>
+      <th class="sortable r" data-type="num">{{ t('col_groups') }}</th>
+      <th class="sortable r" data-type="num">{{ t('tt_k_subjects') }}</th>
+      <th class="sortable r" data-type="num">{{ t('col_days') }}</th>
+    </tr></thead>
+    <tbody>
+      {% set most = (teachers|map(attribute='pairs')|max) or 1 %}
+      {% for x in teachers|sort(attribute='name') %}
+      <tr class="link" data-href="{{ url('/admin/timetable/teacher/' ~ x.id) }}">
+        <td data-v="{{ x.name }}"><a href="{{ url('/admin/timetable/teacher/' ~ x.id) }}"><b>{{ x.name }}</b></a></td>
+        <td class="r" data-v="{{ x.pairs }}"><span class="bar-cell">{{ tt_ui.fmt_pairs(x.pairs) }}<span class="track"><i style="width:{{ (100 * x.pairs / most)|round(1) }}%"></i></span></span></td>
+        <td class="r">{{ x.groups }}</td>
+        <td class="r">{{ x.subjects }}</td>
+        <td class="r">{{ x.days }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,138 @@
+{% extends "admin/base.html" %}
+{% import "admin/_ui.html" as ui with context %}
+{% block title %}{{ t('nav_audit') }}{% endblock %}
+{% block page %}audit{% endblock %}
+{% block campaign_select %}{% endblock %}
+{% block heading %}<h1 class="plain">{{ t('nav_audit') }}</h1><p>{{ t('au_sub') }}</p>{% endblock %}
+
+{% set badge = {'login': 'good', 'logout': 'neutral', 'login_failed': 'bad', 'view': 'b-view', 'action': 'b-change',
+                'export': 'b-change', 'denied': 'warn', 'error': 'bad'} %}
+
+{# One change the request made: "Teacher Qodirov R · department_id: 3 → 5", a new row, or a deleted one. #}
+{% macro change(c) -%}
+  {% if c.op == 'create' %}<div class="chg"><span class="op new">+</span><b>{{ c.entity }}</b> {{ c.label }}
+    <span class="kv">{% for k, v in c.fields.items() %}<span><i>{{ k }}</i> {{ v }}</span>{% endfor %}</span></div>
+  {% elif c.op in ('delete', 'update') %}<div class="chg"><span class="op {{ 'del' if c.op == 'delete' else 'upd' }}">{{ '−' if c.op == 'delete' else '~' }}</span><b>{{ c.entity }}</b> {{ c.label or '' }}
+    {% if c.sql %}<code class="sql">{{ c.sql }}</code>{% endif %}</div>
+  {% else %}<div class="chg"><span class="op upd">~</span><b>{{ c.entity }}</b>{% if c.label %} {{ c.label }}{% endif %} · <i>{{ c.field }}</i>
+    <span class="old">{{ c.old if c.old is not none else '∅' }}</span><span class="arrow">→</span><span class="new">{{ c.new if c.new is not none else '∅' }}</span></div>{% endif %}
+{%- endmacro %}
+
+{% block content %}
+{{ ui.section('activity', t('au_last24')) }}
+<section class="kpis">
+  <div class="kpi"><div class="label">{{ t('au_online') }}</div><div class="value">{% if kpis.online %}<span class="live-dot"></span>{% endif %}{{ kpis.online }}</div><div class="foot">{{ t('au_online_meta') }}</div></div>
+  <div class="kpi"><div class="label">{{ t('au_logins') }}</div><div class="value">{{ kpis.logins }}</div><div class="foot">{{ t('au_failed_n', n=kpis.failed) }}</div></div>
+  <div class="kpi"><div class="label">{{ t('au_actions') }}</div><div class="value">{{ kpis.actions }}</div><div class="foot">{{ t('au_actions_meta') }}</div></div>
+  <div class="kpi"><div class="label">{{ t('au_views') }}</div><div class="value">{{ num(kpis.views) }}</div><div class="foot">{{ t('au_views_meta') }}</div></div>
+  <div class="kpi"><div class="label">{{ t('au_problems') }}</div><div class="value {{ 'bad-text' if kpis.problems }}">{{ kpis.problems }}</div><div class="foot">{{ t('au_problems_meta') }}</div></div>
+</section>
+
+<nav class="tabs page">
+  <a href="/admin/audit?tab=sessions&user={{ user|urlencode }}&start={{ start }}&end={{ end }}" class="{{ 'on' if tab == 'sessions' }}">{{ t('au_sessions') }}</a>
+  <a href="/admin/audit?tab=events&user={{ user|urlencode }}&start={{ start }}&end={{ end }}" class="{{ 'on' if tab == 'events' }}">{{ t('au_events') }}{% if tab == 'events' %}<span class="count">{{ num(total) }}</span>{% endif %}</a>
+</nav>
+
+<section class="card {{ 'flush' }}">
+  <form method="get" action="/admin/audit" class="card-h filters">
+    <input type="hidden" name="tab" value="{{ tab }}">{% if sid %}<input type="hidden" name="sid" value="{{ sid }}">{% endif %}
+    <div><h2>{{ t('au_sessions') if tab == 'sessions' else t('au_events') }}</h2>
+      <div class="sub">{{ t('au_sessions_sub') if tab == 'sessions' else t('au_events_sub') }}</div></div>
+    <div class="toolbar">
+      <label class="select">{{ icon('user') }}<select name="user" onchange="this.form.submit()" aria-label="{{ t('au_user') }}">
+        <option value="">{{ t('au_all_users') }}</option>{% for u in users %}<option value="{{ u }}" {{ 'selected' if u == user }}>{{ u }}</option>{% endfor %}</select></label>
+      {% if tab == 'events' %}
+      <label class="select">{{ icon('activity') }}<select name="kind" onchange="this.form.submit()" aria-label="{{ t('au_kind') }}">
+        <option value="">{{ t('au_all_kinds') }}</option>{% for k in kinds %}<option value="{{ k }}" {{ 'selected' if k == kind }}>{{ t('au_k_' ~ k) }}</option>{% endfor %}</select></label>
+      <label class="input">{{ icon('search') }}<input type="search" name="q" value="{{ q }}" placeholder="{{ t('au_search') }}" aria-label="{{ t('search') }}"></label>
+      {% endif %}
+      <input type="date" name="start" value="{{ start }}" aria-label="{{ t('au_from') }}">
+      <input type="date" name="end" value="{{ end }}" aria-label="{{ t('au_to') }}">
+      <button class="btn primary sm" type="submit">{{ t('search') }}</button>
+    </div>
+  </form>
+
+  {% if tab == 'sessions' %}
+  <div class="table-wrap"><table id="data-table">
+    <thead><tr>
+      <th class="sortable" data-type="text">{{ t('au_user') }}</th>
+      <th class="sortable" data-type="num">{{ t('au_started') }}</th>
+      <th class="sortable" data-type="num">{{ t('au_last') }}</th>
+      <th class="sortable r" data-type="num">{{ t('au_duration') }}</th>
+      <th class="sortable r" data-type="num">{{ t('au_pages') }}</th>
+      <th class="sortable r" data-type="num">{{ t('au_actions_short') }}</th>
+      <th class="sortable" data-type="text">{{ t('au_device') }}</th>
+      <th class="sortable" data-type="text">{{ t('col_status') }}</th>
+    </tr></thead>
+    <tbody>
+    {% for s in sessions %}
+      <tr class="link" data-href="/admin/audit?tab=events&sid={{ s.sid }}&start={{ start }}&end={{ end }}">
+        <td data-v="{{ s.username }}"><b>{{ s.username or '—' }}</b> <span class="tag muted">{{ t('role_' ~ s.role) if s.role else '' }}</span></td>
+        <td class="num" data-v="{{ s.start.timestamp() }}">{{ local_time(s.start, '%d.%m %H:%M') }}</td>
+        <td class="num" data-v="{{ s.last.timestamp() }}">{{ local_time(s.last, '%d.%m %H:%M') }}</td>
+        <td class="r" data-v="{{ s.seconds }}">{{ duration(s.seconds) }}</td>
+        <td class="r" data-v="{{ s.views }}">{{ s.views }}</td>
+        <td class="r" data-v="{{ s.actions }}">{{ s.actions }}{% if s.problems %} <span class="bad-text" data-tip="{{ t('au_problems') }}">· {{ s.problems }}!</span>{% endif %}</td>
+        <td data-v="{{ s.device }}">{{ s.device }}<span class="muted"> · {{ s.ip }}</span></td>
+        <td data-v="{{ s.state }}"><span class="badge {{ {'active': 'good', 'out': 'neutral', 'ended': 'neutral'}[s.state] }}">{{ t('au_state_' ~ s.state) }}</span></td>
+      </tr>
+    {% else %}<tr><td colspan="8">{{ ui.empty('activity', t('au_none')) }}</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+  {% if failed %}
+  <div class="card-h sub-h"><div><h2>{{ t('au_failed_title') }}</h2><div class="sub">{{ t('au_failed_sub') }}</div></div></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>{{ t('col_when') }}</th><th>{{ t('au_tried') }}</th><th>{{ t('au_device') }}</th><th>{{ t('au_result') }}</th></tr></thead>
+    <tbody>{% for f in failed %}<tr><td class="num">{{ local_time(f.at, '%d.%m %H:%M:%S') }}</td><td><b>{{ (f.details or {}).get('username') or f.username or '—' }}</b></td>
+      <td>{{ f.agent and f.agent[:60] }}<span class="muted"> · {{ f.ip }}</span></td><td class="muted">{{ f.status }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% endif %}
+
+  {% else %}
+  {% if sid and session_info %}{% set si = session_info %}
+  <div class="session-sum">
+    <a class="act" href="/admin/audit?tab=sessions&start={{ start }}&end={{ end }}">← {{ t('au_sessions') }}</a>
+    <span><b>{{ si[2] }}</b></span><span class="num">{{ local_time(si[0], '%d.%m.%Y %H:%M') }} – {{ local_time(si[1], '%H:%M') }}</span>
+    <span>{{ duration((si[1] - si[0]).total_seconds()) }}</span><span class="muted">{{ si[4] and si[4][:80] }} · {{ si[3] }}</span>
+  </div>
+  {% endif %}
+  <div class="timeline">
+    {% for r in events %}{% set e = r.e %}
+    {% if r.new_day %}<div class="tl-day">{{ r.day }}</div>{% endif %}
+    <details class="tl-row k-{{ e.kind }}">
+      <summary>
+        <span class="num t">{{ r.time }}</span>
+        <span class="badge {{ badge[e.kind] }}">{{ t('au_k_' ~ e.kind) }}</span>
+        <span class="who">{{ e.username or '—' }}</span>
+        <span class="what">{% if e.title %}{{ e.title }}{% else %}<code>{{ e.method }} {{ e.path }}</code>{% endif %}
+          {% if e.outcome %}<span class="outcome">{{ e.outcome }}</span>{% endif %}</span>
+        <span class="meta">{% if r.spent %}<span data-tip="{{ t('au_spent') }}">{{ icon('clock') }}{{ duration(r.spent) }}</span>{% endif %}
+          {% if e.status >= 400 %}<span class="badge bad">{{ e.status }}</span>{% endif %}
+          {% if e.details and e.details.changes %}<span class="tag">{{ t('au_changes_n', n=e.details.changes|length) }}</span>{% endif %}</span>
+      </summary>
+      <div class="tl-body">
+        {% if e.details and e.details.changes %}<div class="chgs"><div class="lbl">{{ t('au_changes') }}</div>{% for c in e.details.changes %}{{ change(c) }}{% endfor %}</div>{% endif %}
+        {% if e.details and e.details.form %}<div class="lbl">{{ t('au_form') }}</div>
+          <div class="kv">{% for k, v in e.details.form.items() %}<span><i>{{ k }}</i> {{ v }}</span>{% endfor %}</div>{% endif %}
+        <dl class="facts small">
+          <div><dt>{{ t('au_request') }}</dt><dd><code>{{ e.method }} {{ e.path }}{% if e.query %}?{{ e.query }}{% endif %}</code></dd></div>
+          <div><dt>{{ t('au_device') }}</dt><dd>{{ r.device }} · {{ e.ip }}</dd></div>
+          <div><dt>{{ t('au_server') }}</dt><dd>{{ e.status }} · {{ e.ms }} ms</dd></div>
+          {% if e.sid %}<div><dt>{{ t('au_session') }}</dt><dd><a class="link" href="/admin/audit?tab=events&sid={{ e.sid }}&start={{ start }}&end={{ end }}">{{ e.sid }}</a></dd></div>{% endif %}
+          {% if e.details and e.details.session_seconds %}<div><dt>{{ t('au_duration') }}</dt><dd>{{ duration(e.details.session_seconds) }}</dd></div>{% endif %}
+        </dl>
+      </div>
+    </details>
+    {% else %}{{ ui.empty('activity', t('au_none')) }}{% endfor %}
+  </div>
+  <div class="pager">
+    <span>{{ t('page_of', page=page, pages=pages) }}</span>
+    <div class="btns">
+      {% set base = '/admin/audit?tab=events&user=' ~ (user|urlencode) ~ '&kind=' ~ kind ~ '&sid=' ~ sid ~ '&q=' ~ (q|urlencode) ~ '&start=' ~ start ~ '&end=' ~ end %}
+      {% if page > 1 %}<a class="btn" href="{{ base }}&page={{ page - 1 }}">{{ icon('chevron_left') }}{{ t('prev') }}</a>{% endif %}
+      {% if page < pages %}<a class="btn" href="{{ base }}&page={{ page + 1 }}">{{ t('next') }}{{ icon('chevron_right') }}</a>{% endif %}
+    </div>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

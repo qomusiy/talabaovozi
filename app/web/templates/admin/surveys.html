@@ -1,0 +1,73 @@
+{% extends "admin/base.html" %}
+{% import "admin/_ui.html" as ui with context %}
+{% block title %}{{ t('nav_surveys') }}{% endblock %}
+{% block page %}surveys{% endblock %}
+{% block campaign_select %}{% endblock %}
+{% block heading %}<h1 class="plain">{{ t('nav_surveys') }}</h1><p>{{ t('sv_sub') }}</p>{% endblock %}
+{% block content %}
+{% set demo_rows = rows|selectattr('c.is_demo')|list %}
+{% if demo_rows %}
+<section class="callout warn">
+  <span class="icon-badge warn">{{ icon('info') }}</span>
+  <div class="body"><h2>{{ t('demo_title') }}</h2>
+    <p>{{ t('demo_text', rounds=demo_rows|length, n=num(demo_rows|sum(attribute='n'))) }}</p></div>
+  <form method="post" action="/admin/surveys/demo/clear" data-confirm="{{ t('demo_clear_confirm') }}">
+    <button class="btn danger" type="submit" data-tip="{{ t('tip_demo_clear') }}">{{ icon('trash') }}{{ t('demo_clear') }}</button></form>
+</section>
+{% endif %}
+
+<section class="grid">
+  <div class="card span-4">
+    <div class="card-h"><div><h2>{{ t('sv_new') }}</h2>
+      <div class="sub">{{ t('sv_semester', name=semester.name) if semester else t('sv_err_semester') }}</div></div></div>
+    <form method="post" action="/admin/surveys/new" class="form">
+      <label class="field"><span class="lbl">{{ t('sv_name') }}</span>
+        <input type="text" name="title" required maxlength="255" placeholder="{{ t('sv_name_ph') }}"></label>
+      <label class="field"><span class="lbl">{{ t('sv_opens') }}</span>
+        <input type="datetime-local" name="opens" value="{{ new_opens }}" min="{{ sem_min }}" max="{{ sem_max }}" required></label>
+      <label class="field"><span class="lbl">{{ t('sv_closes') }}</span>
+        <input type="datetime-local" name="closes" value="{{ new_closes }}" min="{{ sem_min }}" max="{{ sem_max }}" required></label>
+      {% if semester %}<p class="hint">{{ t('sv_within', start=semester.starts_on.strftime('%d.%m.%Y'), end=semester.ends_on.strftime('%d.%m.%Y')) }}</p>{% endif %}
+      <button class="btn primary" type="submit" {{ 'disabled' if not semester }} data-tip="{{ t('tip_sv_create') }}">{{ icon('plus') }}{{ t('sv_create') }}</button>
+    </form>
+    <p class="hint top">{{ icon('info') }}{{ t('sv_how') }}</p>
+  </div>
+
+  <div class="card flush span-8">
+    <div class="card-h"><div><h2>{{ t('sv_list') }}</h2></div></div>
+    <div class="rounds">
+      {% for r in rows %}{% set c = r.c %}
+      <div class="round">
+        <div class="main">
+          <div class="title"><b>{{ c.title }}</b>{% if c.is_demo %}<span class="tag muted">{{ t('demo_badge') }}</span>{% endif %}
+            <span class="badge {{ {'open': 'good', 'upcoming': 'warn', 'closed': 'neutral'}[r.status] }}">{{ t('st_' ~ r.status) }}</span></div>
+          <div class="sub period">{{ icon('calendar') }}<span class="num">{{ r.period }}</span><span class="muted">· {{ t('sv_days', n=r.days) }}</span></div>
+          <div class="sub"><span class="tag muted">{{ c.semester.name }}</span>
+            {% if r.outside %}<span class="badge warn" data-tip="{{ t('sv_outside_tip', start=c.semester.starts_on.strftime('%d.%m.%Y'), end=c.semester.ends_on.strftime('%d.%m.%Y')) }}">{{ t('sv_outside') }}</span>{% endif %}</div>
+          <div class="sub">{% if r.n %}<a class="link" href="/admin?campaign={{ c.id }}" data-tip="{{ t('tip_sv_results') }}">{{ t('sv_stats', n=num(r.n), p=num(r.participants)) }} →</a>{% else %}{{ t('sv_stats', n=0, p=0) }}{% endif %}</div>
+        </div>
+        <div class="acts">
+          {% if r.status == 'open' %}
+          <form method="post" action="/admin/surveys/{{ c.id }}/close" data-confirm="{{ t('sv_close_confirm') }}">
+            <button class="btn sm" type="submit" data-tip="{{ t('tip_sv_close') }}">{{ icon('pause') }}{{ t('sv_close_now') }}</button></form>
+          {% elif r.status == 'upcoming' %}
+          <form method="post" action="/admin/surveys/{{ c.id }}/open">
+            <button class="btn sm" type="submit" data-tip="{{ t('tip_sv_open') }}">{{ icon('play') }}{{ t('sv_open_now') }}</button></form>
+          {% endif %}
+          <button class="btn sm" type="button" data-toggle="edit-{{ c.id }}" data-tip="{{ t('tip_sv_edit') }}">{{ icon('settings') }}{{ t('sv_edit') }}</button>
+          <form method="post" action="/admin/surveys/{{ c.id }}/delete" data-confirm="{{ t('sv_delete_confirm') }}">
+            <button class="btn sm danger icon-only" type="submit" data-tip="{{ t('tip_sv_delete') }}" aria-label="{{ t('sv_delete') }}">{{ icon('trash') }}</button></form>
+        </div>
+        <form method="post" action="/admin/surveys/{{ c.id }}/edit" class="form inline-edit" id="edit-{{ c.id }}" {{ '' if edit_id == c.id else 'hidden' }}>
+          <label class="field grow"><span class="lbl">{{ t('sv_name') }}</span><input type="text" name="title" value="{{ c.title }}" required maxlength="255"></label>
+          <label class="field"><span class="lbl">{{ t('sv_opens') }}</span><input type="datetime-local" name="opens" value="{{ r.opens }}" max="{{ r.max }}" required></label>
+          <label class="field"><span class="lbl">{{ t('sv_closes') }}</span><input type="datetime-local" name="closes" value="{{ r.closes }}" max="{{ r.max }}" required></label>
+          <button class="btn primary" type="submit">{{ t('save') }}</button>
+          <p class="hint wide">{{ t('sv_within', start=c.semester.starts_on.strftime('%d.%m.%Y'), end=c.semester.ends_on.strftime('%d.%m.%Y')) }}</p>
+        </form>
+      </div>
+      {% else %}{{ ui.empty('clipboard', t('sv_none')) }}{% endfor %}
+    </div>
+  </div>
+</section>
+{% endblock %}

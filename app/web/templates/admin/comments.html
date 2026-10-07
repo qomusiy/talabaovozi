@@ -1,0 +1,56 @@
+{% extends "admin/base.html" %}
+{% import "admin/_ui.html" as ui with context %}
+{% block title %}{{ t('comments_title') }}{% endblock %}
+{% block page %}comments{% endblock %}
+{% block heading %}<h1 class="plain">{{ t('comments_title') }}</h1><p>{{ ui.campaign_label() }}</p>{% endblock %}
+{% block actions %}<a class="btn primary" href="{{ url('/admin/export/comments.xlsx', q=q, band=band_filter, teacher=teacher_id, group=group_id) }}"
+  data-tip="{{ t('tip_excel') }}">{{ icon('download') }}Excel</a>{% endblock %}
+{% block content %}
+<nav class="tabs page">
+  <a href="{{ url('/admin/comments', q=q, teacher=teacher_id, group=group_id) }}" class="{{ 'on' if not band_filter }}">{{ t('band_all') }}<span class="count">{{ num(result.counts.values()|sum) }}</span></a>
+  {% for key in ['lo', 'mid', 'hi'] %}
+  <a href="{{ url('/admin/comments', q=q, teacher=teacher_id, group=group_id, band=key) }}" class="{{ 'on' if band_filter == key }}">{{ t('band_' ~ key) }}<span class="count">{{ num(result.counts[key]) }}</span></a>
+  {% endfor %}
+</nav>
+<section class="card">
+  <div class="card-h">
+    <div><h2>{{ t('comments_title') }}</h2><div class="sub">{{ t('comments_sub', n=num(result.total)) }}</div></div>
+    <form method="get" action="/admin/comments" class="toolbar">
+      <input type="hidden" name="campaign" value="{{ campaign_id or 'all' }}">
+      {% if band_filter %}<input type="hidden" name="band" value="{{ band_filter }}">{% endif %}
+      <label class="input">{{ icon('search') }}<input type="search" name="q" value="{{ q }}" placeholder="{{ t('search_comments') }}" aria-label="{{ t('search') }}"></label>
+      <label class="select" data-tip="{{ t('tip_teacher') }}">{{ icon('teachers') }}
+        <select name="teacher" onchange="this.form.submit()" aria-label="{{ t('col_teacher') }}">
+          <option value="">{{ t('all_teachers') }}</option>
+          {% for x in teachers %}<option value="{{ x.id }}" {{ 'selected' if x.id == teacher_id }}>{{ x.full_name }}</option>{% endfor %}
+        </select></label>
+      <label class="select" data-tip="{{ t('tip_group') }}">{{ icon('groups') }}
+        <select name="group" onchange="this.form.submit()" aria-label="{{ t('col_group') }}">
+          <option value="">{{ t('all_groups') }}</option>
+          {% for g in groups %}<option value="{{ g.id }}" {{ 'selected' if g.id == group_id }}>{{ g.name }}</option>{% endfor %}
+        </select></label>
+      <button class="btn primary" type="submit" data-tip="{{ t('tip_search') }}">{{ t('search') }}</button>
+    </form>
+  </div>
+  <div class="comments">
+    {% for c in result.rows %}
+    <div class="comment">
+      <div>
+        <div class="head"><a href="{{ url('/admin/teachers/' ~ c.teacher_id) }}">{{ c.teacher }}</a>
+          <span class="sub">{% if show_who %}{{ c.student }} · {% endif %}{{ c.group }} · {{ c.date }}</span></div>
+        <p>{{ c.comment }}</p>
+        <div class="scores">{% for key in criteria %}<span>{{ t('cs_' ~ key) }} <b>{{ c[key] }}</b></span>{% endfor %}</div>
+      </div>
+      <div>{{ ui.pill(c.overall) }}</div>
+    </div>
+    {% else %}{{ ui.empty('message', t('no_comments_found')) }}{% endfor %}
+  </div>
+</section>
+<div class="pager" style="border:0;padding:16px 4px">
+  <span>{{ t('page_of', page=page, pages=pages) }}</span>
+  <div class="btns">
+    {% if page > 1 %}<a class="btn" href="{{ url('/admin/comments', q=q, teacher=teacher_id, group=group_id, band=band_filter, page=page-1) }}">{{ icon('chevron_left') }}{{ t('prev') }}</a>{% endif %}
+    {% if page < pages %}<a class="btn" href="{{ url('/admin/comments', q=q, teacher=teacher_id, group=group_id, band=band_filter, page=page+1) }}">{{ t('next') }}{{ icon('chevron_right') }}</a>{% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,317 @@
+{% extends "admin/base.html" %}
+{% import "admin/_ui.html" as ui with context %}
+{% block title %}{{ t('nav_records') }}{% endblock %}
+{% block page %}records{% endblock %}
+{% block campaign_select %}{% endblock %}
+{% block heading %}<h1 class="plain">{{ t('nav_records') }}</h1><p>{{ t('rd_sub') }}</p>{% endblock %}
+
+{% macro status(active) -%}
+<span class="badge {{ 'good' if active else 'neutral' }}">{{ t('rd_active') if active else t('rd_inactive') }}</span>
+{%- endmacro %}
+
+{# The row's values travel with its edit button; admin.js fills the dialog from them. #}
+{% macro edit_btn(rec) -%}
+<button class="btn sm icon-only" type="button" data-edit='{{ rec | tojson }}' data-id="{{ rec.id }}"
+  data-tip="{{ t('rd_tip_edit') }}" aria-label="{{ t('rd_edit') }}: {{ rec.label }}">{{ icon('pencil') }}</button>
+{%- endmacro %}
+
+{% macro dept_options() -%}
+<option value="">{{ t('no_department') }}</option>
+{% for label, ds in dept_groups %}<optgroup label="{{ label }}">{% for d in ds %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</optgroup>{% endfor %}
+{%- endmacro %}
+
+{# One dialog per tab, for adding and editing. "block" explains why a row can't be deleted ({n} = its count). #}
+{% macro dialog(kind, title_new, title_edit, block='') -%}
+<dialog class="modal" id="rec-dialog" data-url-new="/admin/records/{{ kind }}/new" data-url-base="/admin/records/{{ kind }}/"
+  data-title-new="{{ title_new }}" data-title-edit="{{ title_edit }}" data-confirm="{{ t('rd_delete_confirm') }}"
+  data-block="{{ block }}" data-open="{{ open_id or '' }}" aria-labelledby="rec-title">
+  <form method="post" class="form">
+    <input type="hidden" name="next" value="{{ here }}">
+    <div class="modal-h"><h2 id="rec-title">{{ title_new }}</h2>
+      <button class="btn sm icon-only ghost" type="button" data-close aria-label="{{ t('cancel') }}">{{ icon('x') }}</button></div>
+    <div class="modal-b">{{ caller() }}</div>
+    <div class="modal-f">
+      {# Save is the form's first button, so Enter in a field saves. Delete belongs to its own form below. #}
+      <button class="btn primary" type="submit" data-save>{{ t('save') }}</button>
+      <button class="btn" type="button" data-close>{{ t('cancel') }}</button>
+      <span class="spacer"></span>
+      <span data-delete-wrap><button class="btn sm danger" type="submit" form="rec-delete" data-delete>{{ icon('trash') }}{{ t('rd_delete') }}</button></span>
+    </div>
+  </form>
+  <form method="post" id="rec-delete" hidden><input type="hidden" name="next" value="{{ here }}"></form>
+</dialog>
+{%- endmacro %}
+
+{% macro active_switch(hint) -%}
+<label class="switch-row" data-only="edit"><span class="switch"><input type="checkbox" name="active" value="true" checked></span>
+  <span><b>{{ t('rd_active') }}</b><span class="hint">{{ hint }}</span></span></label>
+{%- endmacro %}
+
+{% block content %}
+<nav class="tabs page">
+  {% for key, ic in [('teachers', 'teachers'), ('departments', 'building'), ('groups', 'groups'), ('students', 'students')] %}
+  <a href="/admin/records?tab={{ key }}" class="{{ 'on' if tab == key }}">{{ t('rd_tab_' ~ key) }}<span class="count">{{ num(counts[key]) }}</span></a>
+  {% endfor %}
+  {% if is_programmer %}<a href="/admin/records?tab=feedback" class="{{ 'on' if tab == 'feedback' }}">{{ t('rd_tab_feedback') }}<span class="count">{{ num(counts.feedback) }}</span></a>{% endif %}
+</nav>
+
+{% if tab == 'teachers' %}
+{# ---------------------------------------------------------------- Teachers #}
+<section class="card flush">
+  <div class="card-h">
+    <div><h2>{{ t('rd_tab_teachers') }}</h2><div class="sub">{{ t('rd_teachers_sub') }}</div></div>
+    <div class="toolbar">
+      <label class="input">{{ icon('search') }}<input type="search" id="table-search" placeholder="{{ t('search_teacher') }}" aria-label="{{ t('search') }}"></label>
+      <label class="select" data-tip="{{ t('tip_department') }}">{{ icon('building') }}
+        <select data-filter="dept" aria-label="{{ t('col_department') }}">
+          <option value="">{{ t('all_departments') }}</option>
+          <option value="none">{{ t('no_department') }}</option>
+          {% for label, ds in dept_groups %}<optgroup label="{{ label }}">{% for d in ds %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</optgroup>{% endfor %}
+        </select></label>
+      <button class="btn primary sm" type="button" data-new data-tip="{{ t('rd_tip_add_teacher') }}">{{ icon('plus') }}{{ t('rd_add') }}</button>
+    </div>
+  </div>
+  <div class="table-wrap"><table id="data-table">
+    <thead><tr>
+      <th class="sortable" data-type="text">{{ t('col_teacher') }}</th>
+      <th class="sortable" data-type="text">{{ t('col_department') }}</th>
+      <th class="sortable" data-type="text">{{ t('rd_position') }}</th>
+      <th class="sortable r" data-type="num">{{ t('col_evaluations') }}</th>
+      <th class="sortable" data-type="num">{{ t('col_status') }}</th>
+      <th class="r"><span class="sr">{{ t('rd_edit') }}</span></th>
+    </tr></thead>
+    <tbody>
+    {% for x in rows %}
+      <tr data-dept="{{ x.department_id or 'none' }}" class="{{ 'off' if not x.active }}">
+        <td data-v="{{ x.full_name }}">{{ ui.person(x.full_name, (t('rd_tt_name', name=x.short_name)) if x.short_name and x.short_name != x.full_name else none) }}</td>
+        <td data-v="{{ x.department or '' }}">{% if x.department %}{{ x.department }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td data-v="{{ x.position }}">{{ x.position or '—' }}{% if x.room %} <span class="muted">· {{ t('room') }} {{ x.room }}</span>{% endif %}</td>
+        <td class="r" data-v="{{ x.n }}">{{ x.n }}</td>
+        <td data-v="{{ 1 if x.active else 0 }}">{{ status(x.active) }}</td>
+        <td class="r">{{ edit_btn({'id': x.id, 'label': x.full_name, 'n': x.n, 'full_name': x.full_name, 'department': x.department_id,
+                                   'position': x.position, 'room': x.room, 'active': x.active}) }}</td>
+      </tr>
+    {% else %}<tr><td colspan="6">{{ ui.empty('inbox', t('no_teachers')) }}</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% call dialog('teachers', t('rd_new_teacher'), t('rd_edit_teacher'), t('rd_err_teacher_feedback')) %}
+  <label class="field"><span class="lbl">{{ t('rd_full_name') }}</span><input type="text" name="full_name" required maxlength="255"></label>
+  <label class="field"><span class="lbl">{{ t('col_department') }}</span><select name="department">{{ dept_options() }}</select>
+    <span class="hint">{{ t('rd_dept_hint') }}</span></label>
+  <div class="form-grid two">
+    <label class="field"><span class="lbl">{{ t('rd_position') }}</span><input type="text" name="position" maxlength="128" placeholder="{{ t('rd_position_ph') }}"></label>
+    <label class="field"><span class="lbl">{{ t('room') }}</span><input type="text" name="room" maxlength="32"></label>
+  </div>
+  {{ active_switch(t('rd_active_teacher_hint')) }}
+{% endcall %}
+
+{% elif tab == 'departments' %}
+{# ---------------------------------------------------------------- Kafedras #}
+<section class="card flush">
+  <div class="card-h">
+    <div><h2>{{ t('rd_tab_departments') }}</h2><div class="sub">{{ t('rd_departments_sub') }}</div></div>
+    <div class="toolbar">
+      <label class="input">{{ icon('search') }}<input type="search" id="table-search" placeholder="{{ t('search') }}…" aria-label="{{ t('search') }}"></label>
+      {% if missing %}
+      <form method="post" action="/admin/records/departments-guess"><input type="hidden" name="next" value="{{ here }}">
+        <button class="btn sm" type="submit" data-tip="{{ t('rd_tip_guess') }}">{{ icon('sparkles') }}{{ t('rd_guess', n=missing) }}</button></form>
+      {% endif %}
+      <button class="btn primary sm" type="button" data-new data-tip="{{ t('rd_tip_add_department') }}">{{ icon('plus') }}{{ t('rd_add') }}</button>
+    </div>
+  </div>
+  <div class="table-wrap"><table id="data-table">
+    <thead><tr>
+      <th class="sortable" data-type="text">{{ t('col_department') }}</th>
+      <th class="sortable" data-type="text">{{ t('rd_faculty') }}</th>
+      <th class="sortable r" data-type="num">{{ t('nav_teachers') }}</th>
+      <th class="r"><span class="sr">{{ t('rd_edit') }}</span></th>
+    </tr></thead>
+    <tbody>
+    {% for d in rows %}
+      <tr>
+        <td data-v="{{ d.name }}"><b>{{ d.name }}</b></td>
+        <td data-v="{{ d.faculty }}">{{ t('faculty_of', name=d.faculty) if d.faculty else '—' }}</td>
+        <td class="r" data-v="{{ d.n }}"><a class="link" href="{{ url('/admin/teachers', department=d.id) }}" data-tip="{{ t('rd_tip_dept_teachers') }}">{{ d.n }}</a></td>
+        <td class="r">{{ edit_btn({'id': d.id, 'label': d.name, 'name': d.name, 'faculty': d.faculty}) }}</td>
+      </tr>
+    {% else %}<tr><td colspan="4">{{ ui.empty('building', t('rd_no_departments')) }}</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% call dialog('departments', t('rd_new_department'), t('rd_edit_department')) %}
+  <label class="field"><span class="lbl">{{ t('rd_dept_name') }}</span><input type="text" name="name" required maxlength="255"></label>
+  <label class="field"><span class="lbl">{{ t('rd_faculty') }}</span><input type="text" name="faculty" maxlength="128" list="faculties">
+    <datalist id="faculties">{% for f in faculties %}<option value="{{ f }}">{% endfor %}</datalist>
+    <span class="hint">{{ t('rd_faculty_hint') }}</span></label>
+  <p class="hint wide" data-only="edit">{{ icon('info') }}{{ t('rd_dept_delete_hint') }}</p>
+{% endcall %}
+
+{% elif tab == 'groups' %}
+{# ---------------------------------------------------------------- Groups #}
+<section class="card flush">
+  <div class="card-h">
+    <div><h2>{{ t('rd_tab_groups') }}</h2><div class="sub">{{ t('rd_groups_sub') }}</div></div>
+    <div class="toolbar">
+      <label class="input">{{ icon('search') }}<input type="search" id="table-search" placeholder="{{ t('search_group') }}" aria-label="{{ t('search') }}"></label>
+      <button class="btn primary sm" type="button" data-new data-tip="{{ t('rd_tip_add_group') }}">{{ icon('plus') }}{{ t('rd_add') }}</button>
+    </div>
+  </div>
+  <div class="table-wrap"><table id="data-table">
+    <thead><tr>
+      <th class="sortable" data-type="text">{{ t('col_group') }}</th>
+      <th class="sortable" data-type="text">{{ t('tt_specialty') }}</th>
+      <th class="sortable r" data-type="num">{{ t('col_course') }}</th>
+      <th class="sortable" data-type="text">{{ t('rd_language') }}</th>
+      <th class="sortable r" data-type="num">{{ t('col_students') }}</th>
+      <th class="sortable" data-type="text">{{ t('rd_source') }}</th>
+      <th class="r"><span class="sr">{{ t('rd_edit') }}</span></th>
+    </tr></thead>
+    <tbody>
+    {% for g in rows %}
+      <tr>
+        <td data-v="{{ g.name }}"><b>{{ g.name }}</b></td>
+        <td data-v="{{ specialty(g.code) }}">{{ specialty(g.code) or '—' }}</td>
+        <td class="r" data-v="{{ g.course or 0 }}">{{ g.course or '—' }}</td>
+        <td data-v="{{ g.language }}">{{ t('rd_lang_' ~ g.language) if g.language else '—' }}</td>
+        <td class="r" data-v="{{ g.students }}">{% if g.students %}<a class="link" href="{{ url('/admin/students', group=g.id) }}" data-tip="{{ t('tip_group_students') }}">{{ g.students }}</a>{% else %}0{% endif %}</td>
+        <td data-v="{{ 1 if g.edupage else 0 }}">{% if g.edupage %}<span class="tag">EduPage</span>{% else %}<span class="tag muted">{{ t('rd_manual') }}</span>{% endif %}</td>
+        <td class="r">{{ edit_btn({'id': g.id, 'label': g.name, 'n': g.students, 'name': g.name, 'course': g.course,
+                                   'language': g.language, 'edupage': g.edupage}) }}</td>
+      </tr>
+    {% else %}<tr><td colspan="7">{{ ui.empty('inbox', t('no_groups')) }}</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% call dialog('groups', t('rd_new_group'), t('rd_edit_group'), t('rd_err_group_students')) %}
+  {# A timetable (EduPage) group's name, course and language come back with every sync: they are changed there. #}
+  <p class="flash info inline" data-lock-note="edupage">{{ icon('info') }}<span>{{ t('rd_group_locked') }}</span></p>
+  <label class="field"><span class="lbl">{{ t('rd_group_name') }}</span><input type="text" name="name" required maxlength="64" placeholder="26-01 IQT" data-lock="edupage"></label>
+  <div class="form-grid two">
+    <label class="field"><span class="lbl">{{ t('col_course') }}</span><select name="course" data-lock="edupage"><option value="">—</option>
+      {% for c in range(1, 7) %}<option value="{{ c }}">{{ t('course_n', n=c) }}</option>{% endfor %}</select></label>
+    <label class="field"><span class="lbl">{{ t('rd_language') }}</span><select name="language" data-lock="edupage"><option value="">—</option>
+      {% for l in langs_group %}<option value="{{ l }}">{{ t('rd_lang_' ~ l) }}</option>{% endfor %}</select></label>
+  </div>
+  <p class="hint wide">{{ icon('info') }}{{ t('rd_group_hint') }}</p>
+{% endcall %}
+
+{% elif tab == 'feedback' %}
+{# ---------------------------------------------------------------- Ratings (programmer) #}
+{% if names_hidden %}<div class="flash info">{{ icon('eye_off') }}<span>{{ t('hide_names_on') }}</span>
+  <button class="btn sm" type="button" data-open-display>{{ t('dp_open') }}</button></div>{% endif %}
+<section class="card flush">
+  <div class="card-h">
+    <div><h2>{{ t('rd_tab_feedback') }}</h2><div class="sub">{{ t('rd_feedback_sub') }}</div></div>
+    <form method="get" action="/admin/records" class="toolbar">
+      <input type="hidden" name="tab" value="feedback">
+      <label class="input">{{ icon('search') }}<input type="search" name="q" value="{{ q }}" placeholder="{{ t('rd_feedback_search') }}" aria-label="{{ t('search') }}"></label>
+      <label class="select">{{ icon('calendar') }}<select name="campaign" onchange="this.form.submit()" aria-label="{{ t('col_survey') }}">
+        <option value="">{{ t('all_surveys') }}</option>
+        {% for c in campaigns %}<option value="{{ c.id }}" {{ 'selected' if c.id == campaign_id }}>{{ c.title }}</option>{% endfor %}</select></label>
+      <button class="btn sm" type="submit">{{ t('search') }}</button>
+    </form>
+  </div>
+  <div class="table-wrap"><table id="data-table">
+    <thead><tr>
+      <th class="sortable" data-type="num">{{ t('col_date') }}</th>
+      <th class="sortable" data-type="text">{{ t('col_student') }}</th>
+      <th class="sortable" data-type="text">{{ t('col_teacher') }}</th>
+      {% for key in criteria %}<th class="sortable r" data-type="num" data-tip="{{ criteria[key] }}">{{ t('cs_' ~ key) }}</th>{% endfor %}
+      <th class="sortable r" data-type="num">{{ t('overall') }}</th>
+      <th>{{ t('col_comment') }}</th>
+      <th class="r"><span class="sr">{{ t('rd_edit') }}</span></th>
+    </tr></thead>
+    <tbody>
+    {% for f in rows %}
+      <tr>
+        <td class="num" data-v="{{ f.date.timestamp() }}">{{ local_time(f.date, '%d.%m.%Y') }}<span class="muted"> · {{ f.survey }}</span></td>
+        <td data-v="{{ f.student }}">{{ ui.person(f.student, 'HEMIS ' ~ f.hemis ~ (' · ' ~ f.group if f.group else '')) }}</td>
+        <td data-v="{{ f.teacher }}">{{ f.teacher }}</td>
+        {% for key in criteria %}<td class="r" data-v="{{ f[key] }}">{{ f[key] }}</td>{% endfor %}
+        <td class="r" data-v="{{ f.overall }}">{{ ui.pill(f.overall) }}</td>
+        <td class="wrap clip">{{ f.comment }}</td>
+        <td class="r">{{ edit_btn({'id': f.id, 'label': f.label, 'teaching': f.teaching, 'fairness': f.fairness,
+                                   'professionalism': f.professionalism, 'comment': f.comment}) }}</td>
+      </tr>
+    {% else %}<tr><td colspan="9">{{ ui.empty('inbox', t('no_feedback')) }}</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+  <div class="pager">
+    <span>{{ t('page_of', page=page, pages=pages) }} · {{ num(total) }}</span>
+    <div class="btns">
+      {% if page > 1 %}<a class="btn" href="/admin/records?tab=feedback&q={{ q|urlencode }}&campaign={{ campaign_id or '' }}&page={{ page - 1 }}">{{ icon('chevron_left') }}{{ t('prev') }}</a>{% endif %}
+      {% if page < pages %}<a class="btn" href="/admin/records?tab=feedback&q={{ q|urlencode }}&campaign={{ campaign_id or '' }}&page={{ page + 1 }}">{{ t('next') }}{{ icon('chevron_right') }}</a>{% endif %}
+    </div>
+  </div>
+</section>
+{% call dialog('feedback', t('rd_edit_feedback'), t('rd_edit_feedback')) %}
+  <p class="flash info inline">{{ icon('info') }}<span>{{ t('rd_feedback_hint') }}</span></p>
+  <div class="form-grid three">
+    {% for key in criteria %}<label class="field"><span class="lbl">{{ t('cs_' ~ key) }}</span>
+      <select name="{{ key }}">{% for v in range(1, 11) %}<option value="{{ v }}">{{ v }}</option>{% endfor %}</select></label>{% endfor %}
+  </div>
+  <label class="field"><span class="lbl">{{ t('col_comment') }}</span><textarea name="comment" rows="4" maxlength="2000"></textarea></label>
+{% endcall %}
+
+{% else %}
+{# ---------------------------------------------------------------- Students #}
+<section class="card flush">
+  <div class="card-h">
+    <div><h2>{{ t('rd_tab_students') }}</h2><div class="sub">{{ t('students_sub', n=num(total)) }}</div></div>
+    <form method="get" action="/admin/records" class="toolbar">
+      <input type="hidden" name="tab" value="students">
+      <label class="input">{{ icon('search') }}<input type="search" name="q" value="{{ q }}" placeholder="{{ t('search_student') }}" aria-label="{{ t('search') }}"></label>
+      <label class="select" data-tip="{{ t('tip_group') }}">{{ icon('groups') }}
+        <select name="group" onchange="this.form.submit()" aria-label="{{ t('col_group') }}">
+          <option value="">{{ t('all_groups') }}</option>
+          {% for g in groups %}<option value="{{ g.id }}" {{ 'selected' if g.id == group_id }}>{{ g.name }}</option>{% endfor %}
+        </select></label>
+      <button class="btn sm" type="submit" data-tip="{{ t('tip_search') }}">{{ t('search') }}</button>
+      <button class="btn primary sm" type="button" data-new data-tip="{{ t('rd_tip_add_student') }}">{{ icon('plus') }}{{ t('rd_add') }}</button>
+    </form>
+  </div>
+  <div class="table-wrap"><table id="data-table">
+    <thead><tr>
+      <th class="sortable" data-type="text">{{ t('col_student') }}</th>
+      <th class="sortable" data-type="text">{{ t('col_group') }}</th>
+      <th class="sortable" data-type="num">{{ t('rd_login_code') }}</th>
+      <th class="sortable r" data-type="num">{{ t('col_evaluations') }}</th>
+      <th class="sortable" data-type="num">{{ t('col_status') }}</th>
+      <th class="r"><span class="sr">{{ t('rd_edit') }}</span></th>
+    </tr></thead>
+    <tbody>
+    {% for s in rows %}
+      <tr class="{{ 'off' if not s.active }}">
+        <td data-v="{{ s.full_name }}">{{ ui.person(s.full_name, 'HEMIS ' ~ s.hemis_id) }}</td>
+        <td data-v="{{ s.group or '' }}">{{ s.group or '—' }}</td>
+        <td data-v="{{ 0 if s.temporary else 1 }}">{% if s.temporary %}<code class="code" data-tip="{{ t('temp_code_title') }}">{{ s.temp_code }}</code>{% else %}<span class="muted" data-tip="{{ t('rd_passport_set') }}">{{ icon('key') }}</span>{% endif %}</td>
+        <td class="r" data-v="{{ s.n }}">{{ s.n }}</td>
+        <td data-v="{{ 1 if s.active else 0 }}">{{ status(s.active) }}</td>
+        <td class="r">{{ edit_btn({'id': s.id, 'label': s.full_name, 'n': s.n, 'full_name': s.full_name, 'hemis_id': s.hemis_id,
+                                   'group': s.group_id, 'active': s.active}) }}</td>
+      </tr>
+    {% else %}<tr><td colspan="6">{{ ui.empty('inbox', t('no_students')) }}</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+  <div class="pager">
+    <span>{{ t('page_of', page=page, pages=pages) }}</span>
+    <div class="btns">
+      {% if page > 1 %}<a class="btn" href="/admin/records?tab=students&q={{ q|urlencode }}&group={{ group_id or '' }}&page={{ page - 1 }}">{{ icon('chevron_left') }}{{ t('prev') }}</a>{% endif %}
+      {% if page < pages %}<a class="btn" href="/admin/records?tab=students&q={{ q|urlencode }}&group={{ group_id or '' }}&page={{ page + 1 }}">{{ t('next') }}{{ icon('chevron_right') }}</a>{% endif %}
+    </div>
+  </div>
+</section>
+{% call dialog('students', t('rd_new_student'), t('rd_edit_student'), t('rd_err_student_feedback')) %}
+  <label class="field"><span class="lbl">{{ t('rd_full_name') }}</span><input type="text" name="full_name" required maxlength="255"></label>
+  <div class="form-grid two">
+    <label class="field"><span class="lbl">HEMIS ID</span><input type="text" name="hemis_id" required maxlength="32" inputmode="numeric"></label>
+    <label class="field"><span class="lbl">{{ t('col_group') }}</span><select name="group"><option value="">—</option>
+      {% for g in groups %}<option value="{{ g.id }}">{{ g.name }}</option>{% endfor %}</select></label>
+  </div>
+  <label class="field"><span class="lbl">{{ t('rd_passport') }}</span><input type="text" name="passport" maxlength="16" placeholder="AB1234567" autocomplete="off">
+    <span class="hint" data-only="new">{{ t('rd_passport_hint_new') }}</span><span class="hint" data-only="edit">{{ t('rd_passport_hint_edit') }}</span></label>
+  {{ active_switch(t('rd_active_student_hint')) }}
+{% endcall %}
+{% endif %}
+{% endblock %}

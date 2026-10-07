@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="uz">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#6446ff">
+  <title>Talaba Ovozi</title>
+  <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
+  <link rel="preload" href="/static/vendor/manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/static/fonts.css?v=6">
+  <link rel="stylesheet" href="/static/survey.css?v=9">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>
+    // Pick the theme before first paint to avoid a light/dark flash.
+    (function () {
+      var tg = window.Telegram && window.Telegram.WebApp;
+      // Outside Telegram the SDK still reports "light", so only trust it when opened from Telegram.
+      var dark = tg && tg.initData ? tg.colorScheme === "dark"
+        : window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.dataset.theme = dark ? "dark" : "light";
+    })();
+  </script>
+</head>
+<body>
+  <div id="app" aria-busy="true">
+    <div class="skeleton">
+      <main class="wrap">
+        <div class="summary" style="margin-top:16px"><div class="sk" style="width:72px;height:72px;border-radius:50%"></div>
+          <div style="flex:1"><div class="sk" style="height:16px;width:55%"></div><div class="sk" style="height:12px;width:35%;margin-top:10px"></div></div></div>
+        <div style="height:24px"></div>
+        <div class="sk" style="height:76px;margin-bottom:10px;border-radius:16px"></div>
+        <div class="sk" style="height:76px;margin-bottom:10px;border-radius:16px"></div>
+        <div class="sk" style="height:76px;border-radius:16px"></div>
+      </main>
+    </div>
+  </div>
+  <script>window.FALLBACK_TEXTS = {{ fallback_texts | tojson }};</script>
+  <script src="/static/survey.js?v=10"></script>
+</body>
+</html>
