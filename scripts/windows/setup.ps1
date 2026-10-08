@@ -12,6 +12,7 @@
 #>
 param([string]$Transfer = "", [switch]$Elevated)
 $ErrorActionPreference = "Continue"   # native programs report through exit codes, checked below
+# winget installs come from its own source: the Microsoft Store source fails on some networks (certificate errors).
 $ProgressPreference = "SilentlyContinue"   # downloads are much faster without the progress bar
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $Root = (Resolve-Path "$PSScriptRoot\..\..").Path
@@ -150,7 +151,7 @@ if (-not (Test-Path "$PgBin\psql.exe")) {
     New-Item -ItemType Directory -Force "$Root\data\runtime" | Out-Null
     Set-Content -Path $SuperFile -Value $super -Encoding ASCII
     Write-Host "Installing PostgreSQL $PgVersion (a few minutes)..."
-    & winget.exe install -e --id "PostgreSQL.PostgreSQL.$PgVersion" --accept-package-agreements --accept-source-agreements `
+    & winget.exe install -e --id "PostgreSQL.PostgreSQL.$PgVersion" --source winget --accept-package-agreements --accept-source-agreements `
         --override "--mode unattended --unattendedmodeui none --superpassword $super --serverport $DbPort --disable-components pgAdmin,stackbuilder"
     if (-not (Test-Path "$PgBin\psql.exe")) { Fail "PostgreSQL did not install (see above)" }
 }
@@ -255,7 +256,7 @@ if ($mode -eq "quick" -or $mode -eq "cloudflare") {
     $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
     if (-not (Test-Path $ts)) {
         Write-Host "Installing Tailscale..."
-        & winget.exe install -e --id Tailscale.Tailscale --accept-package-agreements --accept-source-agreements --silent
+        & winget.exe install -e --id Tailscale.Tailscale --source winget --accept-package-agreements --accept-source-agreements --silent
         if (-not (Test-Path $ts)) { Fail "Tailscale did not install (see above)" }
         Start-Sleep -Seconds 5
     }
