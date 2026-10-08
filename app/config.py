@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     # How scripts/tunnel.sh makes the public address: quick (changes after every restart), tailscale or cloudflare
     # (the same address forever - README › Fixed address).
     tunnel: str = "quick"
+    cloudflare_tunnel_token: str = ""   # TUNNEL=cloudflare only (app.server; scripts/tunnel.sh reads .env itself)
 
     # Web server (survey + admin dashboard)
     web_host: str = "127.0.0.1"

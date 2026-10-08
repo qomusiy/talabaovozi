@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Make this computer the Talaba Ovozi server (Ubuntu 24.04 / Debian), right after `git clone`.
-# On Windows the server runs in WSL (Ubuntu inside Windows): there run scripts/windows/setup-windows.ps1 instead,
-# which sets up Windows and then runs this script inside Ubuntu.
+# On Windows use scripts\setup.bat instead.
 #
 #   scripts/setup.sh ~/talaba-transfer-….tar.gz   # moving from another computer (made there: scripts/backup.sh transfer)
 #   scripts/setup.sh                              # a fresh start, without data
@@ -27,7 +26,7 @@ step() { echo; echo "── $*"; }
 step "1/5 System packages"
 if [ "$(ps -p 1 -o comm=)" != systemd ]; then   # it starts everything at boot
   echo "❌ systemd is not running."
-  $IS_WSL && echo "   WSL: scripts/windows/setup-windows.ps1 turns it on (or: [boot] systemd=true in /etc/wsl.conf, then wsl --shutdown)"
+  $IS_WSL && echo "   WSL: add [boot] systemd=true to /etc/wsl.conf, then in PowerShell: wsl --shutdown"
   exit 1
 fi
 missing=()
@@ -41,7 +40,7 @@ fi
 python3 -c 'import sys; sys.exit(sys.version_info < (3, 12))' \
   || { echo "❌ Python 3.12 or newer is needed (Ubuntu 24.04 has it); this computer has $(python3 -V)"; exit 1; }
 systemctl is-enabled --quiet docker 2>/dev/null || sudo systemctl enable --now docker   # the database runs in Docker
-if ! docker info >/dev/null 2>&1; then   # exit code 3 = "restart, then run me again" (setup-windows.ps1 does it)
+if ! docker info >/dev/null 2>&1; then   # exit code 3 = "restart, then run me again"
   id -nG | grep -qw docker || sudo usermod -aG docker "$USER"
   echo
   if $IS_WSL; then
@@ -58,7 +57,7 @@ if docker info --format '{{.OperatingSystem}}' 2>/dev/null | grep -q "Docker Des
   exit 1
 fi
 # A server must not fall asleep (Ubuntu suspends an idle computer by default). Undo: sudo systemctl unmask …
-# (In WSL Windows decides that - setup-windows.ps1.)
+# (In WSL Windows decides that.)
 if ! $IS_WSL && [ "$(systemctl is-enabled suspend.target 2>/dev/null)" != masked ]; then
   echo "Switching off sleep / suspend - this computer is a server now"
   sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target >/dev/null

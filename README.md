@@ -15,69 +15,59 @@ results in a web dashboard.
 | 4 | Dashboard control: data, surveys, bot settings, messages, admins | ✅ |
 | 5 | Analytics (UZ/EN/RU) | ✅ — feedback is still **demo** data until the first real survey |
 | 6 | EduPage timetable → who teaches whom (auto-updated) | ✅ |
-| 7 | Hosting | ✅ one computer as the server — Windows (WSL) or Linux, `scripts/setup.sh` — starts by itself; fixed address with Tailscale or a domain |
+| 7 | Hosting | ✅ one computer as the server — Windows (`scripts\setup.bat`) or Linux (`scripts/setup.sh`) — starts by itself; fixed address with Tailscale or a domain |
 
 ## Running it
 
 ### A new server computer
 
-The server is Linux software (bash scripts, systemd, Docker). On **Windows** it runs in WSL — Ubuntu inside Windows,
-made by Microsoft — and `scripts/windows/setup-windows.ps1` sets that up; on **Linux** `scripts/setup.sh` does it
-directly. Either way you end with the same server, which starts by itself when the computer is switched on, without
-anyone signing in.
-
-**First, on the old computer** (the data is not on GitHub — personal data and keys):
+**First, on the old computer** — the data is not on GitHub (personal data and keys):
 
 ```bash
 scripts/server.sh uninstall    # stop it there (two bots with one token fight; nothing changes after the copy)
 scripts/backup.sh transfer     # -> data/backups/talaba-transfer-<date>.tar.gz: .env + database + uploaded files
 ```
 
-Copy that file by USB stick (or `scp`) — never through GitHub or a public place: it holds the bot token, the
-`SECRET_KEY` and every student. Delete it from the stick afterwards. For Windows copy
-`scripts/windows/setup-windows.ps1` to the stick too.
+(On a Windows server: `scripts\server.bat stop`, then `scripts\server.bat transfer`.) Copy that file by USB stick —
+never through GitHub or a public place: it holds the bot token, the `SECRET_KEY` and every student.
 
-**Windows 10 (22H2) or 11.** Put both files in *Downloads*, open PowerShell **as Administrator** (Start › type
-PowerShell › right-click › *Run as administrator*) and run:
+**Windows 10 / 11:**
 
 ```powershell
-cd $HOME\Downloads
-powershell -ExecutionPolicy Bypass -File .\setup-windows.ps1 -Transfer .\talaba-transfer-<date>.tar.gz
+git clone https://github.com/qomusiy/talabaovozi.git C:\talabaovozi
+# put talaba-transfer-<date>.tar.gz into C:\talabaovozi, then:
+C:\talabaovozi\scripts\setup.bat
 ```
 
-It installs WSL with Ubuntu 24.04 (the first time you create a Linux user name and password, and Windows may ask for
-a restart — then run the same command again), downloads this repository into Ubuntu (`~/talaba-ovozi`; another
-repository: `-Repo <url>`), runs `scripts/setup.sh` there, keeps Windows awake (no sleep or hibernation, the lid
-does nothing) and adds the task *Talaba Ovozi server* that starts Ubuntu — and with it everything — when Windows
-starts. For that it asks for your Windows password once (Windows keeps it; for a Microsoft account it is that
-account's password, not the PIN). Check it once: restart Windows, don't sign in, wait 2 minutes, use the bot.
+`setup.bat` (double-clicking it works too) asks for administrator rights and installs what is missing: Python 3.12,
+PostgreSQL 16 (a Windows service on port 5433, reachable only from this computer), cloudflared or Tailscale. It
+restores the data from the transfer file, asks which public address to use (*Fixed address*), keeps Windows awake
+(no sleep or hibernation, a laptop lid does nothing) and adds the task *Talaba Ovozi* (Task Scheduler) that runs the
+server — `python -m app.server`: web, bot and tunnel, each restarted if it stops, plus the nightly backup — whenever
+Windows starts, before anyone signs in. It is safe to run again. Pick a folder outside OneDrive (`C:\talabaovozi`).
 
-Living with it on Windows:
-- Server commands are typed in Ubuntu: Start › *Ubuntu*, then `cd ~/talaba-ovozi` and `scripts/server.sh status`
-  (and the other commands below). The dashboard is at http://127.0.0.1:8000/admin in the Windows browser.
-- The files are in Explorer at `\\wsl.localhost\Ubuntu-24.04\home\<linux user>\talaba-ovozi` (e.g. `data\backups`
-  to copy backups to a USB disk).
-- Don't install Docker Desktop (it runs only while someone is signed in); `setup.sh` uses Docker inside Ubuntu.
-- `wsl --shutdown` stops the server; the task starts it again within 30 seconds.
-- Windows updates may restart the computer at night: that's fine, it comes back by itself.
-- Keep the computer on a cable (Ethernet) or a Wi-Fi that connects by itself, and plugged in.
+```powershell
+scripts\server.bat status             # running? + the public address
+scripts\server.bat logs bot           # follow a log: server | web | bot | tunnel (Ctrl+C stops following)
+scripts\server.bat restart            # after changing .env
+scripts\server.bat update             # after pushing new code: git pull, new packages, restart
+scripts\server.bat backup | backups | restore <file> | transfer | stop | start
+```
 
 **Linux (Ubuntu 24.04)**, as the user that will run it (with sudo rights):
 
 ```bash
-git clone https://github.com/qomusiy/talaba-ovozi.git talaba-ovozi
+git clone https://github.com/qomusiy/talabaovozi.git talaba-ovozi
 cd talaba-ovozi
 scripts/setup.sh ~/talaba-transfer-<date>.tar.gz   # or no file: a fresh start without data
 ```
 
 `setup.sh` installs Docker, the Python packages and the tunnel program, restores the data, switches off sleep, and
-installs the services (*Server mode* below). It asks which public address to use (*Fixed address*). If it asks for a
-restart (Docker's group), restart and run the same command again; it is safe to run any number of times.
+installs the systemd services (*Server mode* below). If it asks for a restart (Docker's group), restart and run the
+same command again; it is safe to run any number of times. To update: `git pull && scripts/setup.sh`.
 
-**Updating the server** after pushing new code — in the server's (Ubuntu) terminal:
-`cd ~/talaba-ovozi && git pull && scripts/setup.sh` (installs new packages, updates the database and restarts
-everything; `scripts/server.sh restart` is enough for code-only changes). Once the repository is private, the server
-needs a GitHub login for `git pull`: run `gh auth login` there once (`sudo apt install gh`).
+Once the repository is private, the server needs a GitHub login for `git pull`/`update` (Windows: Git asks in a
+browser window the first time; Linux: `gh auth login`).
 
 ### Fixed address
 
@@ -98,7 +88,7 @@ needs a GitHub login for `git pull`: run `gh auth login` there once (`sudo apt i
 With a fixed address the dashboard and the bot don't offer *Yangi manzil olish*; if the address stops answering, the
 tunnel reconnects to the same one by itself.
 
-### Server mode
+### Server mode (Linux)
 
 The survey, the dashboard and the bot run as systemd user services: they restart if they crash and start at boot.
 

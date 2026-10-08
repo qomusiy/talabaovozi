@@ -15,6 +15,7 @@ asyncpg
 alembic
 # Config
 pydantic-settings
+tzdata            # time zones on Windows (Asia/Tashkent); Linux has its own
 # Excel
 openpyxl
 # Pictures the bot sends (timetable, menu card)
