@@ -972,9 +972,9 @@ html[data-links] a.link { text-decoration: underline; text-underline-offset: 3px
 .dp-sample { padding: 12px 14px; border-radius: 10px; background: var(--surface-2); border: 1px dashed var(--border); color: var(--ink-2); }
 .dp-sample a { color: var(--accent); }
 #dp-saved { font-size: .75rem; }
-.display-dialog .privacy { padding-top: 14px; border-top: 1px solid var(--border); }
-.display-dialog .privacy b { display: inline-flex; align-items: center; gap: 7px; }
-.display-dialog .privacy b svg.i { width: 16px; height: 16px; color: var(--accent); }
+.display-dialog .dp-section { padding-top: 14px; border-top: 1px solid var(--border); }
+.display-dialog .dp-section b { display: inline-flex; align-items: center; gap: 7px; }
+.display-dialog .dp-section b svg.i { width: 16px; height: 16px; color: var(--accent); }
 .user .priv { display: inline-flex; align-items: center; gap: 3px; color: var(--accent); }
 .user .priv svg.i { width: 12px; height: 12px; }
 .narrow-card + .narrow-card { margin-top: 16px; }
@@ -1269,3 +1269,16 @@ html[data-links] a.link { text-decoration: underline; text-underline-offset: 3px
   .tg-msg { max-width: 92%; }
   .chat-head { padding: 8px 10px; }
 }
+
+/* ---------- Foydalanuvchilar: one account (admin/user.html) ---------- */
+.user-head { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+.user-head b { font-size: 1.05rem; }
+.avatar { width: 64px; height: 64px; flex: none; border-radius: 50%; object-fit: cover; background: var(--surface-2); }
+.avatar.none { display: grid; place-items: center; font-size: 1.6rem; font-weight: 700; color: var(--muted); }
+.user-note { display: flex; gap: 8px; margin: 12px 0 0; padding: 10px 12px; border-radius: 10px;
+  background: var(--surface-2); font-size: .8125rem; }
+.user-card .pub-row { margin-top: 14px; }
+.danger-zone { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; margin-top: 18px;
+  padding-top: 14px; border-top: 1px dashed var(--border); }
+.tg-src { margin: 14px 0 8px; font-size: .75rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+td.wrap { white-space: normal; min-width: 220px; }

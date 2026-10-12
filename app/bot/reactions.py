@@ -1,4 +1,4 @@
-"""The bot reacts to people's messages with an emoji, the way a person would: 🔥 on /start, 👀 on a HEMIS number,
+"""The bot reacts to people's messages with an emoji, the way a person would: 🔥 on /start, 👀 on a command,
 ❤ on a thank-you. Switched off with "Xabarlarga emoji" on the dashboard's Telegram bot page."""
 import random
 import re
@@ -17,11 +17,7 @@ THANKS = re.compile(r"(rahmat|raxmat|rahmet|tashakkur|спасибо|благо�
 HELLO = re.compile(r"\b(salom|assalom\w*|salam|привет|здравств\w*|hello|hi|hey)\b", re.I)
 
 
-def pick(message: Message, raw_state: str | None) -> str | None:
-    if raw_state == "Login:passport":  # that message is deleted at once
-        return None
-    if raw_state == "Login:hemis":
-        return "👀"
+def pick(message: Message) -> str | None:
     text = message.text or message.caption or ""
     if text.startswith("/"):
         command = text[1:].split(maxsplit=1)[0].split("@")[0].lower() if len(text) > 1 else ""
@@ -39,7 +35,7 @@ class ReactionMiddleware(BaseMiddleware):
     """dp.message middleware: the answer goes first, then the reaction."""
 
     async def __call__(self, handler, event: Message, data: dict):
-        emoji = pick(event, data.get("raw_state")) if event.chat.type == "private" else None
+        emoji = pick(event) if event.chat.type == "private" else None
         result = await handler(event, data)
         if emoji and (await settings_store.load(data["session"]))["bot_reactions"]:
             with suppress(TelegramAPIError):

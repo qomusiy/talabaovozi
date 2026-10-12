@@ -386,13 +386,6 @@
     setTimeout(() => el.remove(), 7000);
   }
 
-  // Admins: "show who rated" only matters for viewers.
-  document.querySelectorAll("select[data-role]").forEach((sel) => {
-    const sw = sel.closest("form").querySelector("[data-viewer-only]");
-    const sync = () => { if (sw) sw.hidden = sel.value !== "viewer"; };
-    sel.addEventListener("change", sync);
-    sync();
-  });
 
   // Editing data: one dialog per tab, filled from the row's edit button (or empty for "Add").
   const dialog = document.getElementById("rec-dialog");
@@ -444,9 +437,11 @@
   if (dp) {
     const form = dp.querySelector("form"), saved = document.getElementById("dp-saved");
     const flags = ["contrast", "motion", "spacing", "links"];
-    const hide = form.elements.hide_names;
+    // Switches that change what the server puts in the page: who rated (programmer accounts only), group numbers.
+    const served = ["hide_names", "group_numbers"].map((k) => form.elements[k]).filter(Boolean);
+    const servedNow = () => served.map((el) => el.checked).join();
     const snapshot = () => JSON.stringify([ROOT.dataset.text, ROOT.dataset.theme, "contrast" in ROOT.dataset]);
-    let hideOpened = hide.checked;
+    let servedOpened = servedNow();
     let opened = snapshot(), saving;
     const apply = () => {
       const text = form.elements.text.value, theme = form.elements.theme.value;
@@ -468,24 +463,23 @@
       form.elements.text.value = "100";
       form.elements.theme.value = "auto";
       flags.forEach((k) => (form.elements[k].checked = false));
-      if (!hide.disabled) hide.checked = false;
+      served.forEach((el) => (el.checked = false));
       apply();
       save();
     });
     document.querySelectorAll("[data-open-display]").forEach((b) => b.addEventListener("click", () => {
       opened = snapshot();
-      hideOpened = hide.checked;
+      servedOpened = servedNow();
       saved.textContent = "";
       setNav(false);
       dp.showModal();
     }));
     dp.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", () => dp.close()));
     dp.addEventListener("click", (e) => { if (e.target === dp) dp.close(); });
-    // Charts take their colours and text size when they are drawn: draw them again by reloading the page.
-    // Names are left out by the server, and charts take their colours and text size when they are drawn:
-    // after such a change the page is loaded again.
+    // Names and group numbers are put in by the server, and charts take their colours and text size when they are
+    // drawn: after such a change the page is loaded again.
     dp.addEventListener("close", () => {
-      if (hide.checked !== hideOpened
+      if (servedNow() !== servedOpened
           || (snapshot() !== opened && document.querySelector(".chart, [id^=ch-]"))) setTimeout(() => location.reload(), 300);
     });
   }

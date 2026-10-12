@@ -1,0 +1,61 @@
+{% extends "admin/base.html" %}
+{% import "admin/_ui.html" as ui with context %}
+{% block title %}{{ t('nav_users') }}{% endblock %}
+{% block page %}users{% endblock %}
+{% block campaign_select %}{% endblock %}
+{% block heading %}<h1 class="plain">{{ t('nav_users') }}</h1><p>{{ t('us_intro') }}</p>{% endblock %}
+{% block content %}
+<nav class="tabs page">
+  {% for key in ['all', 'rated', 'no_group', 'stopped', 'flood', 'demo'] %}
+  <a href="/admin/users?f={{ key }}{% if q %}&q={{ q|urlencode }}{% endif %}{% if group_id %}&group={{ group_id }}{% endif %}"
+     class="{{ 'on' if f == key }}">{{ t('us_f_' ~ key) }}<span class="count">{{ num(counts[key]) }}</span></a>
+  {% endfor %}
+</nav>
+<section class="card flush">
+  <div class="card-h">
+    <div><h2>{{ t('nav_users') }}</h2><div class="sub">{{ t('us_total', n=num(total)) }}</div></div>
+    <form method="get" action="/admin/users" class="toolbar">
+      {% if f != 'all' %}<input type="hidden" name="f" value="{{ f }}">{% endif %}
+      <label class="input">{{ icon('search') }}<input type="search" name="q" value="{{ q }}" placeholder="{{ t('us_search') }}" aria-label="{{ t('search') }}"></label>
+      <label class="select">{{ icon('groups') }}
+        <select name="group" onchange="this.form.submit()" aria-label="{{ t('col_group') }}">
+          <option value="">{{ t('all_groups') }}</option>
+          {% for g in groups %}<option value="{{ g.id }}" {{ 'selected' if g.id == group_id }}>{{ grp(g.name) }}</option>{% endfor %}
+        </select></label>
+      <button class="btn primary" type="submit">{{ t('search') }}</button>
+    </form>
+  </div>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>{{ t('us_col_user') }}</th><th>Telegram ID</th><th>{{ t('col_group') }}</th>
+      <th class="r">{{ t('us_col_ratings') }}</th><th class="r">{{ t('us_col_updates') }}</th><th>{{ t('us_col_seen') }}</th>
+      <th>{{ t('col_status') }}</th></tr></thead>
+    <tbody>
+    {% for r in rows %}{% set u = r.u %}
+      <tr>
+        <td><a class="row-link" href="/admin/users/{{ u.id }}">{{ ui.person(u.name, ('@' ~ u.username) if u.username else none) }}</a></td>
+        <td class="num muted">{{ u.id if u.id > 0 else '—' }}</td>
+        <td>{{ grp(r.group) or '—' }}</td>
+        <td class="r"><b>{{ r.n }}</b></td>
+        <td class="r">{{ u.updates }}</td>
+        <td class="num muted">{{ local(u.last_seen_at).strftime('%d.%m.%Y %H:%M') }}</td>
+        <td>{% if r.state == 'blocked' %}<span class="badge bad">{{ t('us_state_blocked') }}</span>
+          {% elif r.state == 'suspended' %}<span class="badge warn">{{ t('us_state_suspended') }}</span>
+          {% elif u.is_demo %}<span class="badge neutral">{{ t('demo_badge') }}</span>
+          {% elif not u.onboarded_at %}<span class="badge neutral">{{ t('us_state_new') }}</span>
+          {% else %}<span class="badge good">{{ t('us_state_ok') }}</span>{% endif %}
+          {% if u.floods %}<span class="tag muted" data-tip="{{ t('us_floods_tip') }}">⚡ {{ u.floods }}</span>{% endif %}</td>
+      </tr>
+    {% else %}<tr><td colspan="7">{{ ui.empty('inbox', t('us_none')) }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="pager">
+    <span>{{ t('page_of', page=page, pages=pages) }}</span>
+    <div class="btns">
+      {% if page > 1 %}<a class="btn" href="/admin/users?{{ params }}&page={{ page - 1 }}">{{ icon('chevron_left') }}{{ t('prev') }}</a>{% endif %}
+      {% if page < pages %}<a class="btn" href="/admin/users?{{ params }}&page={{ page + 1 }}">{{ t('next') }}{{ icon('chevron_right') }}</a>{% endif %}
+    </div>
+  </div>
+</section>
+{% endblock %}

@@ -16,10 +16,8 @@ from app.models import AppSetting
 
 DEFAULTS: dict[str, Any] = {
     # Bot
-    "login_open": True,           # new students can log in (logged-in students are not affected)
     "support_contact": "",        # "" = the value from .env
     "tech_contact": "",
-    "admin_telegram_ids": [],     # Telegram accounts told the new dashboard address when it changes
     "channel_url": "https://t.me/iqtisodiyot_uz1",  # the faculty's channel: a button on the bot's menu ("" = none)
     "bot_reactions": True,        # the bot puts an emoji reaction on students' messages (👀 🔥 ❤ ...)
     # Survey
@@ -32,16 +30,17 @@ DEFAULTS: dict[str, Any] = {
     "timetable_sync_hours": 6,
     "assignments_source": "timetable",  # who-teaches-whom: "timetable" (automatic) or "excel" (uploaded)
     "excluded_subjects": ["Kelajak soati"],  # not rated in the survey
-    "reminders": False,           # automatic reminders to students who haven't finished (3 days and 1 day before the end)
+    "reminders": False,           # automatic reminders to users who haven't finished (3 days and 1 day before the end)
     "reminders_sent": {},         # campaign id -> reminders already sent ("3", "1")
     # Dashboard
     "admin_online": False,        # the dashboard can also be opened through the public address (not only here)
     # Written by the system, shown on the dashboard
     "timetable_checked_at": "", "timetable_error": "", "bot_seen_at": "", "bot_username": "",
     "daily_report_sent": "",      # the day (YYYY-MM-DD) the admins' daily report last went out
+    "server_alert": {},           # the latest server status message to admins and its messages (app.bot.server_alerts)
 }
 SYSTEM_KEYS = {"timetable_checked_at", "timetable_error", "bot_seen_at", "bot_username", "reminders_sent",
-               "daily_report_sent"}
+               "daily_report_sent", "server_alert"}
 TTL = 10.0
 _cache: dict[str, Any] = {}
 _loaded_at = -TTL

@@ -1,5 +1,5 @@
-"""Inline buttons. The bot has no reply keyboard: everything is a message with buttons under it, and sections
-open in that same message (with ⬅️ Back), like a small app."""
+"""Inline buttons. The bot has no reply keyboard: everything is a card with buttons under it, and a tap swaps
+the card for the next one (with ⬅️ Back), like a small app."""
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, WebAppInfo
 
 from app.bot.i18n import LANGUAGE_NAMES, t
@@ -9,23 +9,23 @@ def _b(text: str, data: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(text=text, callback_data=data)
 
 
-def _channel_row(lang: str, channel: str) -> list[list[InlineKeyboardButton]]:
-    """The faculty's Telegram channel (dashboard › Telegram bot › settings; empty = no button)."""
-    return [[InlineKeyboardButton(text=t(lang, "btn_channel"), url=channel)]] if channel else []
-
-
-def home(lang: str, url: str = "", survey: bool = False, done: bool = False, channel: str = "") -> InlineKeyboardMarkup:
-    """The home card's buttons. The survey button opens the Mini App (only while a survey is open)."""
+def home(lang: str, url: str = "", survey: bool = False, done: bool = False, channel: str = "",
+         group: bool = True) -> InlineKeyboardMarkup:
+    """The home card's buttons. The survey button opens the Mini App (only while a survey is open). Everything
+    else needs a group: without one, the first button picks it."""
+    help_row = [_b(t(lang, "btn_help"), "help")]
+    if channel:
+        help_row.append(InlineKeyboardButton(text=t(lang, "btn_channel"), url=channel))
+    if not group:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [_b(t(lang, "btn_pick_group"), "pick:home")], [_b(t(lang, "btn_language"), "choose_lang")], help_row])
     rows = []
     if survey and url:
         label = t(lang, "btn_review") if done else t(lang, "btn_open_survey")
         rows.append([InlineKeyboardButton(text=label, web_app=WebAppInfo(url=f"{url}/survey"))])
-    rows += [[_b(t(lang, "btn_timetable"), "timetable"), _b(t(lang, "btn_teachers"), "teachers:1")],
-             [_b(t(lang, "btn_profile"), "profile"), _b(t(lang, "btn_language"), "choose_lang")]]
-    if channel:
-        rows.append([_b(t(lang, "btn_help"), "help"), InlineKeyboardButton(text=t(lang, "btn_channel"), url=channel)])
-    else:
-        rows.append([_b(t(lang, "btn_help"), "help")])
+    rows.append([_b(t(lang, "btn_timetable"), "timetable"), _b(t(lang, "btn_teachers"), "teachers:1")])
+    rows.append([_b(t(lang, "btn_change_group"), "pick:home"), _b(t(lang, "btn_language"), "choose_lang")])
+    rows.append(help_row)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -33,14 +33,40 @@ def back(lang: str, to: str = "home") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[_b(t(lang, "btn_back"), to)]])
 
 
-def profile(lang: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[_b(t(lang, "btn_logout"), "logout")],
-                                                 [_b(t(lang, "btn_back"), "home")]])
+# ---------- The introduction and picking a group: course › specialty › group ----------
+# Callback data carries where "Back" from the first step leads: pick:<from>, pc:<from>:<course>,
+# ps:<from>:<course>:<code>, pg:<group id> - <from> is intro or home.
+
+def intro(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[_b(t(lang, "btn_pick_group"), "pick:intro")]])
 
 
-def logout_confirm(lang: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[_b(t(lang, "btn_logout_yes"), "logout:yes")],
-                                                 [_b(t(lang, "btn_back"), "profile")]])
+def _grid(buttons: list[InlineKeyboardButton], per_row: int) -> list[list[InlineKeyboardButton]]:
+    return [buttons[i:i + per_row] for i in range(0, len(buttons), per_row)]
+
+
+def _picker_tail(lang: str, back_to: str) -> list[list[InlineKeyboardButton]]:
+    return [[_b(t(lang, "btn_back"), back_to)]]
+
+
+def pick_course(lang: str, came_from: str, courses: list[int]) -> InlineKeyboardMarkup:
+    back_to = "intro" if came_from == "intro" else "home"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        *_grid([_b(t(lang, "course_n", n=c), f"pc:{came_from}:{c}") for c in courses], 2),
+        *_picker_tail(lang, back_to)])
+
+
+def pick_specialty(lang: str, came_from: str, course: int, specialties: list[tuple[str, str]]) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        *[[_b(name, f"ps:{came_from}:{course}:{code}")] for code, name in specialties],
+        *_picker_tail(lang, f"pick:{came_from}")])
+
+
+def pick_group(lang: str, came_from: str, course: int, groups: list) -> InlineKeyboardMarkup:
+    """The number students know a group by ("302") once an admin has typed it in, else its name."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        *_grid([_b(g.number or g.name, f"pg:{g.id}") for g in groups], 3 if all(g.number for g in groups) else 2),
+        *_picker_tail(lang, f"pc:{came_from}:{course}")])
 
 
 def pages(lang: str, page: int, total: int) -> InlineKeyboardMarkup:
@@ -53,32 +79,16 @@ def pages(lang: str, page: int, total: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[*([nav] if nav else []), [_b(t(lang, "btn_back"), "home")]])
 
 
-def languages(back_to_home: bool = False, lang: str = "uz", back_to: str = "") -> InlineKeyboardMarkup:
+def languages(lang: str = "uz", back_to: str = "") -> InlineKeyboardMarkup:
     items = list(LANGUAGE_NAMES.items())
     rows = [[_b(name, f"lang:{code}") for code, name in items[i:i + 2]] for i in range(0, len(items), 2)]
-    if back_to_home or back_to:
-        rows.append([_b(t(lang, "btn_back"), back_to or "home")])
+    if back_to:
+        rows.append([_b(t(lang, "btn_back"), back_to)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def welcome(lang: str, channel: str = "") -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [_b(t(lang, "btn_login"), "login")],
-        [_b(t(lang, "btn_language"), "choose_lang"), _b(t(lang, "btn_help"), "help")],
-        *_channel_row(lang, channel),
-    ])
-
-
-def cancel(lang: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[_b(t(lang, "btn_cancel"), "cancel")]])
-
-
-def retry(lang: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[_b(t(lang, "btn_retry"), "login")]])
-
-
 def open_survey(lang: str, url: str) -> InlineKeyboardMarkup:
-    """A single "start evaluating" button (messages to students from the dashboard, reminders)."""
+    """A single "start evaluating" button (messages to the bot's users from the dashboard, reminders)."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t(lang, "btn_open_survey"), web_app=WebAppInfo(url=url))]])
 

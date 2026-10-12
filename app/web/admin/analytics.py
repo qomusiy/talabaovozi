@@ -1,19 +1,21 @@
 """Aggregate queries for the admin dashboard.
 
 Every function takes a campaign id (None = all campaigns). "Overall" score = mean of the three criteria.
+The survey is anonymous: a participant is a bot account (Feedback.user_id), and "out of how many" is the groups'
+student counts (Group.student_count). Who rated is only filled in (`who`) for pages that may show it.
 """
 from dataclasses import dataclass
 
-from sqlalchemy import Numeric, and_, case, cast, distinct, func, literal, or_, select
+from sqlalchemy import Numeric, String, and_, cast, distinct, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models import (
+    BotUser,
     Department,
     Feedback,
     Group,
     Semester,
-    Student,
     SurveyCampaign,
     Teacher,
     TeachingAssignment,
@@ -29,6 +31,32 @@ def _r(x, digits=2):
 
 def _campaign_filter(campaign_id: int | None):
     return Feedback.campaign_id == campaign_id if campaign_id else literal(True)
+
+
+def pct(part, whole) -> float:
+    """Percent, at most 100: an anonymous group can have more respondents than students (the numbers show it)."""
+    return min(100.0, round(100 * part / whole, 1)) if whole else 0
+
+
+async def student_total(session: AsyncSession) -> int:
+    """Students in the faculty: the groups' student counts."""
+    return int(await session.scalar(select(func.coalesce(func.sum(Group.student_count), 0))) or 0)
+
+
+async def in_bot(session: AsyncSession) -> int:
+    """Accounts that started the bot (finished its introduction)."""
+    return await session.scalar(select(func.count(BotUser.id)).where(BotUser.onboarded_at.is_not(None))) or 0
+
+
+WHO = (func.concat_ws(" ", BotUser.first_name, BotUser.last_name,
+                      func.nullif(func.concat("@", BotUser.username), "@"))).label("who")
+
+
+def who_search(q: str):
+    """Search by a rater's name, @username or Telegram id (pages that may show who rated)."""
+    like = f"%{q.strip().lstrip('@')}%"
+    return or_(BotUser.first_name.ilike(like), BotUser.last_name.ilike(like), BotUser.username.ilike(like),
+               cast(BotUser.id, String).ilike(like))
 
 
 async def campaigns(session: AsyncSession) -> list[SurveyCampaign]:
@@ -65,21 +93,17 @@ async def departments(session: AsyncSession) -> list[Department]:
 async def kpis(session: AsyncSession, campaign_id: int | None) -> dict:
     cf = _campaign_filter(campaign_id)
     fb = (await session.execute(select(
-        func.count(Feedback.id), func.count(distinct(Feedback.student_id)), func.count(distinct(Feedback.teacher_id)),
+        func.count(Feedback.id), func.count(distinct(Feedback.user_id)), func.count(distinct(Feedback.teacher_id)),
         func.avg(Feedback.teaching), func.avg(Feedback.fairness), func.avg(Feedback.professionalism),
         func.avg(OVERALL), func.count(Feedback.comment),
     ).where(cf))).one()
-    st = (await session.execute(select(
-        func.count(Student.id), func.count(Student.registered_at),
-    ).where(Student.is_active))).one()
-    total_students, registered = st
+    total_students, registered = await student_total(session), await in_bot(session)
     return {
         "evaluations": fb[0], "participants": fb[1], "teachers_rated": fb[2],
         "teaching": _r(fb[3]), "fairness": _r(fb[4]), "professionalism": _r(fb[5]),
         "overall": _r(fb[6]), "comments": fb[7],
         "students": total_students, "registered": registered,
-        "participation_pct": round(100 * fb[1] / total_students, 1) if total_students else 0,
-        "registered_pct": round(100 * registered / total_students, 1) if total_students else 0,
+        "participation_pct": pct(fb[1], total_students), "registered_pct": pct(registered, total_students),
     }
 
 
@@ -115,18 +139,19 @@ async def specialty_criteria(session: AsyncSession, campaign_id: int | None) -> 
 
 async def latest_comments(session: AsyncSession, campaign_id: int | None, limit: int = 8) -> list[dict]:
     rows = (await session.execute(
-        select(Feedback, Student.full_name, Teacher.full_name, Group.name)
-        .join(Student, Student.id == Feedback.student_id).join(Teacher, Teacher.id == Feedback.teacher_id)
+        select(Feedback, WHO, Teacher.full_name, Group.name)
+        .join(BotUser, BotUser.id == Feedback.user_id).join(Teacher, Teacher.id == Feedback.teacher_id)
         .outerjoin(Group, Group.id == Feedback.group_id)
         .where(_campaign_filter(campaign_id), Feedback.comment.is_not(None))
         .order_by(Feedback.created_at.desc()).limit(limit)
     )).all()
-    return [_comment_row(f, s, t, g) for f, s, t, g in rows]
+    return [_comment_row(f, w, t, g) for f, w, t, g in rows]
 
 
-def _comment_row(f: Feedback, student: str, teacher: str | None, group: str | None) -> dict:
+def _comment_row(f: Feedback, who: str, teacher: str | None, group: str | None) -> dict:
     return {
-        "student": student, "teacher": teacher, "teacher_id": f.teacher_id, "group": group,
+        "who": who or str(f.user_id), "user_id": f.user_id, "teacher": teacher, "teacher_id": f.teacher_id,
+        "group": group,
         "date": f.created_at.strftime("%d.%m.%Y"), "comment": f.comment,
         "teaching": f.teaching, "fairness": f.fairness,
         "professionalism": f.professionalism,
@@ -137,16 +162,16 @@ def _comment_row(f: Feedback, student: str, teacher: str | None, group: str | No
 # ---------------------------------------------------------------- Teachers
 
 async def _expected_students(session: AsyncSession, semester_id: int | None) -> dict[int, int]:
-    """teacher_id -> number of active students in the groups they teach that semester."""
+    """teacher_id -> number of students in the groups they teach that semester (the groups' student counts)."""
     if not semester_id:
         return {}
     pairs = (select(TeachingAssignment.teacher_id.label("t"), TeachingAssignment.group_id.label("g"))
              .where(TeachingAssignment.semester_id == semester_id).distinct().subquery())
     rows = (await session.execute(
-        select(pairs.c.t, func.count(Student.id)).join(Student, and_(Student.group_id == pairs.c.g, Student.is_active))
-        .group_by(pairs.c.t)
+        select(pairs.c.t, func.sum(Group.student_count)).join(Group, Group.id == pairs.c.g)
+        .where(Group.student_count > 0).group_by(pairs.c.t)
     )).all()
-    return dict(rows)
+    return {t: int(n) for t, n in rows if n}
 
 
 async def teacher_table(session: AsyncSession, campaign_id: int | None, department_id: int | None = None) -> list[dict]:
@@ -168,7 +193,7 @@ async def teacher_table(session: AsyncSession, campaign_id: int | None, departme
         out.append({"id": tid, "name": name, "department": dept, "room": room, "n": n,
                     "teaching": _r(a), "fairness": _r(b), "professionalism": _r(c),
                     "overall": _r(o), "comments": comments, "expected": exp,
-                    "response_pct": round(100 * n / exp, 1) if exp else None})
+                    "response_pct": pct(n, exp) if exp else None})
     return sorted(out, key=lambda r: (r["overall"] is None, -(r["overall"] or 0)))
 
 
@@ -206,8 +231,8 @@ async def teacher_detail(session: AsyncSession, teacher_id: int, campaign_id: in
     expected = (await _expected_students(session, semester_id)).get(teacher_id)
 
     comments = (await session.execute(
-        select(Feedback, Student.full_name, Group.name)
-        .join(Student, Student.id == Feedback.student_id).outerjoin(Group, Group.id == Feedback.group_id)
+        select(Feedback, WHO, Group.name)
+        .join(BotUser, BotUser.id == Feedback.user_id).outerjoin(Group, Group.id == Feedback.group_id)
         .where(cf, Feedback.teacher_id == teacher_id).order_by(Feedback.created_at.desc())
     )).all()
 
@@ -217,7 +242,7 @@ async def teacher_detail(session: AsyncSession, teacher_id: int, campaign_id: in
                     "room": teacher.room_number, "department": teacher.department.name if teacher.department else None},
         "n": me[0], "comments_count": me[5], "rank": rank, "ranked_total": len(ranked),
         "groups_taught": len({g for g, _, _ in lessons}), "expected": expected,
-        "response_pct": round(100 * me[0] / expected, 1) if expected and campaign_id else None,
+        "response_pct": pct(me[0], expected) if expected and campaign_id else None,
         "scores": {"teaching": _r(me[1]), "fairness": _r(me[2]),
                    "professionalism": _r(me[3]), "overall": _r(me[4])},
         "faculty": {"teaching": _r(faculty[0]), "fairness": _r(faculty[1]),
@@ -225,11 +250,11 @@ async def teacher_detail(session: AsyncSession, teacher_id: int, campaign_id: in
         "by_group": [{"name": g, "n": n, "teaching": _r(a), "fairness": _r(b),
                       "professionalism": _r(c), "overall": _r(o)} for g, n, a, b, c, o in by_group],
         "distribution": await distribution(session, campaign_id, teacher_id),
-        "feedback": [_comment_row(f, s, None, g) for f, s, g in comments],
+        "feedback": [_comment_row(f, w, None, g) for f, w, g in comments],
     }
 
 
-# ---------------------------------------------------------------- Groups & students
+# ---------------------------------------------------------------- Groups
 
 async def _expected_teachers_per_group(session: AsyncSession, semester_id: int | None) -> dict[int, int]:
     if not semester_id:
@@ -241,36 +266,38 @@ async def _expected_teachers_per_group(session: AsyncSession, semester_id: int |
     return dict(rows)
 
 
-def _per_student_counts(campaign_id: int | None):
-    return (select(Feedback.student_id.label("sid"), func.count(distinct(Feedback.teacher_id)).label("rated"),
-                   func.max(Feedback.created_at).label("last"))
-            .where(_campaign_filter(campaign_id)).group_by(Feedback.student_id).subquery())
-
-
 async def group_table(session: AsyncSession, campaign_id: int | None, course: int | None = None) -> list[dict]:
+    """Per group: its students (student_count), the accounts that picked it in the bot (registered), the accounts
+    that rated as members of it (participants) and those who rated all its teachers (completed)."""
     expected = await _expected_teachers_per_group(session, await semester_of(session, campaign_id))
-    per_student = _per_student_counts(campaign_id)
-    q = (select(Group.id, Group.name, Group.course, func.count(Student.id), func.count(Student.registered_at),
-                func.count(per_student.c.sid), func.coalesce(func.sum(per_student.c.rated), 0),
-                func.array_agg(per_student.c.rated))
-         .join(Student, and_(Student.group_id == Group.id, Student.is_active))
-         .outerjoin(per_student, per_student.c.sid == Student.id).group_by(Group.id))
-    if course:
-        q = q.where(Group.course == course)
+    per_user = (select(Feedback.group_id.label("gid"), Feedback.user_id.label("uid"),
+                       func.count(distinct(Feedback.teacher_id)).label("rated"))
+                .where(_campaign_filter(campaign_id), Feedback.group_id.is_not(None))
+                .group_by(Feedback.group_id, Feedback.user_id).subquery())
+    rated = {gid: (n, int(total or 0), counts) for gid, n, total, counts in (await session.execute(
+        select(per_user.c.gid, func.count(), func.sum(per_user.c.rated), func.array_agg(per_user.c.rated))
+        .group_by(per_user.c.gid))).all()}
+    registered = dict((await session.execute(
+        select(BotUser.group_id, func.count()).where(BotUser.group_id.is_not(None), BotUser.onboarded_at.is_not(None))
+        .group_by(BotUser.group_id))).all())
     avg_by_group = dict((await session.execute(
         select(Feedback.group_id, func.avg(OVERALL)).where(_campaign_filter(campaign_id)).group_by(Feedback.group_id)
     )).all())
+    q = select(Group.id, Group.name, Group.course, Group.student_count)
+    if course:
+        q = q.where(Group.course == course)
     out = []
-    for gid, name, crs, students, registered, participants, rated_sum, rated_list in (await session.execute(q)).all():
-        exp = expected.get(gid, 0)
-        rated_sum = int(rated_sum)
-        completed = sum(1 for r in rated_list if r is not None and exp and r >= exp)
-        out.append({"id": gid, "name": name, "course": crs, "students": students, "registered": registered,
-                    "participants": participants, "completed": completed, "teachers": exp,
-                    "participation_pct": round(100 * participants / students, 1) if students else 0,
-                    "registered_pct": round(100 * registered / students, 1) if students else 0,
-                    "coverage_pct": round(100 * rated_sum / (students * exp), 1) if students and exp else 0,
-                    "overall": _r(avg_by_group.get(gid))})
+    for gid, name, crs, size in (await session.execute(q)).all():
+        participants, rated_sum, counts = rated.get(gid, (0, 0, []))
+        if not (size or participants or registered.get(gid)):
+            continue
+        students, exp = size or 0, expected.get(gid, 0)
+        out.append({"id": gid, "name": name, "course": crs, "students": students,
+                    "registered": registered.get(gid, 0), "participants": participants,
+                    "completed": sum(1 for r in counts if exp and r >= exp), "teachers": exp,
+                    "participation_pct": pct(participants, students),
+                    "registered_pct": pct(registered.get(gid, 0), students),
+                    "coverage_pct": pct(rated_sum, students * exp), "overall": _r(avg_by_group.get(gid))})
     return sorted(out, key=lambda r: r["name"])
 
 
@@ -282,68 +309,8 @@ def course_summary(groups: list[dict]) -> list[dict]:
         c["participants"] += g["participants"]
         c["registered"] += g["registered"]
     for c in by.values():
-        c["participation_pct"] = round(100 * c["participants"] / c["students"], 1) if c["students"] else 0
+        c["participation_pct"] = pct(c["participants"], c["students"])
     return [by[k] for k in sorted(by)]
-
-
-STUDENT_STATUSES = ("not_registered", "registered", "partial", "completed")
-
-
-@dataclass
-class StudentPage:
-    rows: list[dict]
-    total: int
-    counts: dict[str, int]
-
-
-async def student_table(session: AsyncSession, campaign_id: int | None, group_id: int | None = None,
-                        status: str | None = None, search: str | None = None,
-                        page: int = 1, per_page: int = 50) -> StudentPage:
-    """Students with their participation status in the campaign.
-
-    Status: not_registered (never logged in to the bot) / registered (logged in, rated nobody) /
-    partial (rated some of their teachers) / completed (rated all of them).
-    """
-    semester_id = await semester_of(session, campaign_id)
-    exp_sub = (select(TeachingAssignment.group_id.label("gid"),
-                      func.count(distinct(TeachingAssignment.teacher_id)).label("exp"))
-               .where(TeachingAssignment.semester_id == semester_id).group_by(TeachingAssignment.group_id).subquery())
-    ps = _per_student_counts(campaign_id)
-    rated = func.coalesce(ps.c.rated, 0)
-    expected = func.coalesce(exp_sub.c.exp, 0)
-    status_expr = case(
-        (Student.registered_at.is_(None) & (rated == 0), "not_registered"),
-        (rated == 0, "registered"),
-        (rated < expected, "partial"),
-        else_="completed",
-    ).label("status")
-
-    base = (select(Student.id, Student.full_name, Student.hemis_id, Group.name.label("group"), Student.telegram_id,
-                   Student.registered_at, Student.passport_temporary, rated.label("rated"), expected.label("expected"), ps.c.last, status_expr)
-            .outerjoin(Group, Group.id == Student.group_id)
-            .outerjoin(exp_sub, exp_sub.c.gid == Student.group_id)
-            .outerjoin(ps, ps.c.sid == Student.id)
-            .where(Student.is_active))
-    if group_id:
-        base = base.where(Student.group_id == group_id)
-    if search:
-        like = f"%{search.strip()}%"
-        base = base.where(or_(Student.full_name.ilike(like), Student.hemis_id.ilike(like)))
-    sub = base.subquery()
-
-    counts = dict((await session.execute(select(sub.c.status, func.count()).group_by(sub.c.status))).all())
-    q = select(sub)
-    if status in STUDENT_STATUSES:
-        q = q.where(sub.c.status == status)
-    total = (await session.execute(select(func.count()).select_from(q.subquery()))).scalar()
-    rows = (await session.execute(
-        q.order_by(sub.c.group, sub.c.full_name).offset((page - 1) * per_page).limit(per_page))).mappings().all()
-    return StudentPage(
-        rows=[{**r, "last": r["last"].strftime("%d.%m.%Y %H:%M") if r["last"] else None,
-               "registered": r["registered_at"] is not None, "in_bot": r["telegram_id"] is not None}
-              for r in rows],
-        total=total, counts={s: counts.get(s, 0) for s in STUDENT_STATUSES},
-    )
 
 
 async def all_groups(session: AsyncSession) -> list[Group]:
@@ -353,11 +320,11 @@ async def all_groups(session: AsyncSession) -> list[Group]:
 # ---------------------------------------------------------------- Overview extras
 
 async def participation_curve(session: AsyncSession, campaign_id: int | None) -> list[dict]:
-    """Cumulative number of students who had rated at least one teacher, day by day (one campaign)."""
+    """Cumulative number of accounts that had rated at least one teacher, day by day (one campaign)."""
     if not campaign_id:
         return []
-    first = (select(Feedback.student_id, func.min(LOCAL_DAY).label("d"))
-             .where(Feedback.campaign_id == campaign_id).group_by(Feedback.student_id).subquery())
+    first = (select(Feedback.user_id, func.min(LOCAL_DAY).label("d"))
+             .where(Feedback.campaign_id == campaign_id).group_by(Feedback.user_id).subquery())
     rows = (await session.execute(select(first.c.d, func.count()).group_by(first.c.d).order_by(first.c.d))).all()
     total, out = 0, []
     for d, n in rows:
@@ -377,9 +344,9 @@ class CommentPage:
 
 
 def _comment_filters(campaign_id: int | None, q: str | None, teacher_id: int | None, group_id: int | None,
-                     by_student: bool = True) -> list:
-    """Filters of the comments page, shared with its Excel export (the query must join Student and Teacher).
-    by_student=False: the search doesn't match student names (for viewers who may not see them)."""
+                     by_user: bool = False) -> list:
+    """Filters of the comments page, shared with its Excel export (the query must join BotUser and Teacher).
+    by_user=True: the search also matches who rated (pages that may show it)."""
     conditions = [_campaign_filter(campaign_id), Feedback.comment.is_not(None)]
     if teacher_id:
         conditions.append(Feedback.teacher_id == teacher_id)
@@ -388,7 +355,7 @@ def _comment_filters(campaign_id: int | None, q: str | None, teacher_id: int | N
     if q:
         like = f"%{q.strip()}%"
         conditions.append(or_(Feedback.comment.ilike(like), Teacher.full_name.ilike(like),
-                              *([Student.full_name.ilike(like)] if by_student else [])))
+                              *([who_search(q)] if by_user else [])))
     return conditions
 
 
@@ -399,12 +366,12 @@ def _in_band(band: str):
 
 async def comment_feed(session: AsyncSession, campaign_id: int | None, q: str | None = None,
                        band: str | None = None, teacher_id: int | None = None, group_id: int | None = None,
-                       page: int = 1, per_page: int = 30, by_student: bool = True) -> CommentPage:
+                       page: int = 1, per_page: int = 30, by_user: bool = False) -> CommentPage:
     """Evaluations that have a written comment, newest first, with filters."""
-    base = (select(Feedback, Student.full_name, Teacher.full_name, Group.name)
-            .join(Student, Student.id == Feedback.student_id).join(Teacher, Teacher.id == Feedback.teacher_id)
+    base = (select(Feedback, WHO, Teacher.full_name, Group.name)
+            .join(BotUser, BotUser.id == Feedback.user_id).join(Teacher, Teacher.id == Feedback.teacher_id)
             .outerjoin(Group, Group.id == Feedback.group_id)
-            .where(*_comment_filters(campaign_id, q, teacher_id, group_id, by_student)))
+            .where(*_comment_filters(campaign_id, q, teacher_id, group_id, by_user)))
     counts = {}
     for key in COMMENT_BANDS:
         counts[key] = (await session.execute(
@@ -414,20 +381,21 @@ async def comment_feed(session: AsyncSession, campaign_id: int | None, q: str | 
     total = (await session.execute(select(func.count()).select_from(base.subquery()))).scalar()
     rows = (await session.execute(
         base.order_by(Feedback.created_at.desc()).offset((page - 1) * per_page).limit(per_page))).all()
-    return CommentPage(rows=[_comment_row(f, s, t, g) for f, s, t, g in rows], total=total, counts=counts)
+    return CommentPage(rows=[_comment_row(f, w, t, g) for f, w, t, g in rows], total=total, counts=counts)
 
 
 async def comment_export_rows(session: AsyncSession, campaign_id: int | None, q: str | None = None,
                               band: str | None = None, teacher_id: int | None = None,
-                              group_id: int | None = None, by_student: bool = True) -> list[tuple]:
-    """The comments page for Excel: the same filters, every page, newest first."""
-    query = (select(SurveyCampaign.title, LOCAL_DAY, Teacher.full_name, Department.name, Student.full_name,
-                    Student.hemis_id, Group.name, Feedback.teaching, Feedback.fairness, Feedback.professionalism,
+                              group_id: int | None = None, by_user: bool = False) -> list[tuple]:
+    """The comments page for Excel: the same filters, every page, newest first. Columns: survey, date, teacher,
+    kafedra, who rated (name @username), Telegram id, group, the three criteria, overall, comment."""
+    query = (select(SurveyCampaign.title, LOCAL_DAY, Teacher.full_name, Department.name, WHO,
+                    Feedback.user_id, Group.name, Feedback.teaching, Feedback.fairness, Feedback.professionalism,
                     func.round(cast(OVERALL, Numeric), 1), Feedback.comment)
              .join(SurveyCampaign, SurveyCampaign.id == Feedback.campaign_id)
              .join(Teacher, Teacher.id == Feedback.teacher_id).outerjoin(Department, Department.id == Teacher.department_id)
-             .join(Student, Student.id == Feedback.student_id).outerjoin(Group, Group.id == Feedback.group_id)
-             .where(*_comment_filters(campaign_id, q, teacher_id, group_id, by_student)))
+             .join(BotUser, BotUser.id == Feedback.user_id).outerjoin(Group, Group.id == Feedback.group_id)
+             .where(*_comment_filters(campaign_id, q, teacher_id, group_id, by_user)))
     if band in COMMENT_BANDS:
         query = query.where(_in_band(band))
     return (await session.execute(query.order_by(Feedback.created_at.desc()))).all()

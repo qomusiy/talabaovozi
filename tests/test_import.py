@@ -6,11 +6,10 @@ from openpyxl import Workbook
 from sqlalchemy import func, select
 
 from app.faculty import group_key
-from app.importers.excel import (ImportFileError, import_assignments, import_students, import_teachers, teaching_sheets,
-                                 parse_timetable, tidy_name)
+from app.importers.excel import (ImportFileError, import_assignments, import_group_sizes, import_teachers,
+                                 parse_timetable, teaching_sheets, tidy_name)
 from app.importers.templates import TEMPLATES, template_xlsx
-from app.models import Group, Semester, Student, Teacher, TeachingAssignment
-from app.security import hash_passport, normalize_passport, temporary_passport, verify_passport
+from app.models import Group, Semester, Teacher, TeachingAssignment
 from app.services.teaching import name_key, teacher_name_keys
 
 
@@ -22,13 +21,6 @@ def xlsx(*rows) -> BytesIO:
     wb.save(buf)
     buf.seek(0)
     return buf
-
-
-def test_passport_normalization():
-    assert normalize_passport(" as 348-0990 ") == "AS3480990"
-    assert normalize_passport("АС3480990") == "AC3480990"  # Cyrillic letters typed by mistake
-    assert verify_passport("as3480990", hash_passport("AS3480990"))
-    assert not verify_passport("AS3480991", hash_passport("AS3480990"))
 
 
 def test_group_keys_match_hemis_and_edupage_spellings():
@@ -47,62 +39,36 @@ def test_names():
     assert {"qodirov rs", "qodirov rustam", "qodirov r"} <= teacher_name_keys("Qodirov Rustam Sobirovich")
 
 
-async def test_import_students_with_varied_headers(session):
+async def test_group_sizes_from_a_hemis_export_count_students_and_keep_no_names(session):
     f = xlsx(
         ["Talabalar ro'yxati"],  # title row above the header, common in real exports
         ["Talaba ID", "Familiya ismi sharifi", "Passport", "Группа", "Talaba kursi"],
-        [368211100001.0, "Karimov  Aziz", "as 1234567", "25-16 IQT", "2-kurs"],  # float id, messy spacing
+        [368211100001.0, "Karimov  Aziz", "as 1234567", "25-16 IQT", "2-kurs"],  # float id
         ["368211100002", "Saidova Madina", "AB7654321", "25-16-IQT uz", "2-kurs"],  # same group, HEMIS spelling
-        ["368211100003", "Bad Passport", "12345", "25-16 IQT", "2-kurs"],
-        ["368211100002", "Duplicate", "AB7654321", "25-16 IQT", "2-kurs"],
+        ["368211100003", "Toshmatov Eshmat", "", "25-17 IQT", "2-kurs"],
+        ["368211100002", "Duplicate", "AB7654321", "25-16 IQT", "2-kurs"],         # the same student twice
+        ["368211100004", "No Group", "", "", ""],
     )
-    report = await import_students(session, f)
-    assert report.created == 2 and len(report.errors) == 2
-    st = (await session.execute(select(Student).where(Student.hemis_id == "368211100001"))).scalar_one()
-    assert st.full_name == "Karimov Aziz" and not st.passport_temporary
-    assert verify_passport("AS1234567", st.passport_hash)
-    group = (await session.execute(select(Group))).scalar_one()
-    assert (group.key, group.course) == ("25-16 IQT", 2)
+    report = await import_group_sizes(session, f)
+    assert (report.updated, report.skipped, len(report.errors)) == (2, 1, 1)
+    sizes = dict((await session.execute(select(Group.key, Group.student_count))).all())
+    assert sizes == {"25-16 IQT": 2, "25-17 IQT": 1}
+    assert (await session.scalar(select(Group.course).where(Group.key == "25-16 IQT"))) == 2
 
 
-async def test_students_without_passports_get_temporary_codes_until_real_ones_arrive(session):
-    """The real HEMIS export has no passport column: students get a temporary code, later replaced."""
-    await import_students(session, xlsx(["Talaba ID", "Full Name of student", "Talaba kursi", "Guruh"],
-                                        ["376231103290", "TOSHMATOV ESHMAT", "4-kurs", "23-01 IQT"]))
-    st = (await session.execute(select(Student))).scalar_one()
-    code = temporary_passport("376231103290")
-    assert st.passport_temporary and verify_passport(code, st.passport_hash)
-    assert st.full_name == "Toshmatov Eshmat"
-
-    # A file with only HEMIS + passport updates the passport and nothing else.
-    report = await import_students(session, xlsx(["HEMIS ID", "Pasport"], ["376231103290", "AD1231212"]))
-    assert (report.created, report.updated, report.errors) == (0, 1, [])
-    await session.refresh(st)
-    assert not st.passport_temporary and verify_passport("AD1231212", st.passport_hash)
-    assert st.full_name == "Toshmatov Eshmat"
-
-    # A new student needs a name and a group.
-    report = await import_students(session, xlsx(["HEMIS ID", "Pasport"], ["376231103299", "AD1231213"]))
-    assert report.created == 0 and "needs a name and a group" in report.messages()[0]
-
-
-async def test_reimport_updates_keeps_telegram_link_and_deactivates_missing(session):
-    await import_students(session, xlsx(["HEMIS ID", "F.I.Sh.", "Pasport", "Guruh"],
-                                        ["368211100001", "Old Name", "AA1111111", "25-01 IQT"],
-                                        ["368211100002", "Graduated", "AA1111112", "25-01 IQT"]))
-    st = (await session.execute(select(Student).where(Student.hemis_id == "368211100001"))).scalar_one()
-    st.telegram_id = 999
-    report = await import_students(session, xlsx(["HEMIS ID", "F.I.Sh.", "Guruh"],
-                                                 ["368211100001", "New Name", "25-02 IQT"]),
-                                   deactivate_missing=True)
-    assert (report.created, report.updated, report.deactivated, report.temporary) == (0, 1, 1, 0)
-    await session.refresh(st)
-    assert st.full_name == "New Name" and st.telegram_id == 999 and verify_passport("AA1111111", st.passport_hash)
+async def test_group_sizes_from_a_count_column_and_clearing_missing_groups(session):
+    await import_group_sizes(session, xlsx(["Guruh", "Talabalar soni"], ["25-01 IQT", 28], ["25-02 IQT", "30"]))
+    report = await import_group_sizes(session, xlsx(["Guruh", "Talabalar soni"], ["25-01 IQT", 27], ["25-03 IQT", "x"]))
+    assert len(report.errors) == 1 and "not a number" in report.messages()[0]
+    report = await import_group_sizes(session, xlsx(["Guruh", "Talabalar soni"], ["25-01 IQT", 26]), clear_missing=True)
+    assert report.deactivated == 1
+    sizes = dict((await session.execute(select(Group.key, Group.student_count))).all())
+    assert sizes == {"25-01 IQT": 26, "25-02 IQT": None}
 
 
 async def test_missing_column_gives_clear_error(session):
-    with pytest.raises(ImportFileError, match="HEMIS ID"):
-        await import_students(session, xlsx(["F.I.Sh.", "Guruh"], ["A", "G"]))
+    with pytest.raises(ImportFileError, match="Guruh"):
+        await import_group_sizes(session, xlsx(["F.I.Sh.", "Pasport"], ["A", "G"]))
 
 
 async def test_assignments_match_teacher_by_id_name_or_timetable_name(session):
@@ -141,7 +107,7 @@ async def test_every_template_imports(session):
     session.add(Semester(name="S", starts_on=date(2026, 9, 1), ends_on=date(2027, 1, 20), is_current=True))
     await session.flush()
     sem = await session.scalar(select(Semester))
-    assert not (await import_students(session, template_xlsx("students", sample=True))).errors
+    assert not (await import_group_sizes(session, template_xlsx("students", sample=True))).errors
     teachers, assignments = teaching_sheets(template_xlsx("teaching", sample=True))
     assert len(teachers) == 2 and len(assignments) == 3
     assert not (await import_teachers(session, None, rows=teachers)).errors
@@ -155,9 +121,8 @@ async def test_template_examples_are_never_imported(session):
     """A downloaded template has the example only on its "Namuna" sheet: uploading it unchanged adds nothing."""
     from openpyxl import load_workbook
     wb = load_workbook(template_xlsx("students", {"groups": ["25-16 IQT"]}))
-    assert wb.sheetnames[:3] == ["Talabalar", "Yo‘riqnoma", "Namuna"] and wb.active.title == "Talabalar"
-    sheet = wb["Talabalar"]
-    assert sheet["A2"].value is None and sheet["A2"].number_format == "@"           # empty; HEMIS kept as text
-    report = await import_students(session, template_xlsx("students"))
-    assert report.created == 0
+    assert wb.sheetnames[:3] == ["Guruhlar", "Yo‘riqnoma", "Namuna"] and wb.active.title == "Guruhlar"
+    assert wb["Guruhlar"]["A2"].value is None
+    report = await import_group_sizes(session, template_xlsx("students"))
+    assert report.updated == 0
     assert teaching_sheets(template_xlsx("teaching")) == ([], [])

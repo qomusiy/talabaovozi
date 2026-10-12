@@ -1,14 +1,15 @@
 from collections.abc import AsyncIterator
 
+from datetime import datetime, timezone
+
+from aiogram.types import User
 from fastapi import Depends, Header, HTTPException, Request
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
 from app.db import session_scope
-from app.models import Admin, Student
-from app.services.students import get_by_telegram
+from app.models import Admin, BotUser
+from app.services import users
 from app.web.telegram_auth import verify_init_data
 
 
@@ -30,29 +31,33 @@ async def get_session() -> AsyncIterator[AsyncSession]:
         yield session
 
 
-async def current_student(
+async def current_user(
     request: Request,
     session: AsyncSession = Depends(get_session, scope="function"),
     x_telegram_init_data: str | None = Header(default=None),
-    x_dev_hemis: str | None = Header(default=None),
-) -> Student:
+    x_dev_user: str | None = Header(default=None),
+) -> BotUser:
+    """The bot account of whoever opened the survey - Telegram signs who that is (initData). Someone who opens it
+    without having started the bot gets an account too (no group yet). Blocked / suspended accounts: 403."""
     settings = get_settings()
     if x_telegram_init_data:
-        user = verify_init_data(x_telegram_init_data, settings.bot_token)
-        if user is None:
+        tg = verify_init_data(x_telegram_init_data, settings.bot_token)
+        try:
+            account = User.model_validate({"first_name": "", **(tg or {}), "is_bot": False})
+        except ValueError:  # signed, but not a user we understand
+            account = None
+        if account is None or account.id <= 0:
             raise HTTPException(401, "invalid_init_data")
-        student = await get_by_telegram(session, int(user["id"]))
-        if student is None:
-            raise HTTPException(403, "not_registered")
-        return student
-    # Dev shortcut: only on this computer, never through the public tunnel.
-    if settings.dev_mode and x_dev_hemis and is_local_request(request):
-        student = (await session.execute(
-            select(Student).options(selectinload(Student.group)).where(Student.hemis_id == x_dev_hemis)
-        )).scalar_one_or_none()
-        if student:
-            return student
-    raise HTTPException(401, "open_in_telegram")
+        user = await users.seen(session, account, count=False, extra={"webapp_user": tg})
+    elif settings.dev_mode and (x_dev_user or "").isdigit() and is_local_request(request):
+        # Dev shortcut: only on this computer, never through the public tunnel.
+        user = await users.seen(session, User(id=int(x_dev_user), is_bot=False, first_name="Dev"), count=False)
+        user.onboarded_at = user.onboarded_at or datetime.now(timezone.utc)
+    else:
+        raise HTTPException(401, "open_in_telegram")
+    if kind := users.restriction(user):
+        raise HTTPException(403, kind)
+    return user
 
 
 class LoginRequired(Exception):

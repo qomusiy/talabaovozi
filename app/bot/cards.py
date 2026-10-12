@@ -1,11 +1,16 @@
-"""The bot's cards: one message with the menu picture on top, a caption and buttons under it. Tapping a button
-changes the caption and buttons of that same message (like a small app), so the chat stays short.
+"""The bot's cards: one message with the menu picture on top, a caption and buttons under it.
 
-The picture is uploaded once; after that Telegram's id for it is reused. A text that is too long for a photo
-caption (1024 characters) is sent as an ordinary message instead.
+Tapping a button swaps the card: the next one is sent at the bottom of the chat while the tapped one is deleted,
+both at the same time, so the chat always ends with a single fresh card (no caption changing in place).
+
+The picture is uploaded once; after that Telegram's id for it is reused, so a new card appears at once. A text that
+is too long for a photo caption (1024 characters) is sent as an ordinary message instead.
 """
+import asyncio
 import logging
 import re
+import time
+from contextlib import suppress
 from html import unescape
 
 from aiogram import Bot
@@ -17,6 +22,9 @@ from app.runtime import menu_photo
 log = logging.getLogger("bot")
 CAPTION_LIMIT = 1024
 _photo: dict = {"key": None, "id": None}
+# (chat, tapped card) -> (when, the new card being sent): a second quick tap on the same card gets that same card.
+_swaps: dict[tuple[int, int], tuple[float, asyncio.Future]] = {}
+DOUBLE_TAP = 10  # seconds
 
 
 def visible_length(html: str) -> int:
@@ -51,19 +59,28 @@ async def send_card(bot: Bot, chat_id: int, text: str, markup: InlineKeyboardMar
     return await bot.send_message(chat_id, text, reply_markup=markup)
 
 
-async def edit_card(message: Message, text: str, markup: InlineKeyboardMarkup | None) -> Message:
-    """Show `text` in the card that was tapped; returns the message that now shows it (a new one if needed)."""
+async def remove_card(bot: Bot, chat_id: int, message_id: int) -> None:
+    """Delete a card; one Telegram no longer lets the bot delete (older than 48 hours) just loses its buttons."""
     try:
-        if message.photo:
-            if not fits_caption(text):
-                raise ValueError("too long for a caption")
-            await message.edit_caption(caption=text, reply_markup=markup)
-        else:
-            await message.edit_text(text, reply_markup=markup)
-        return message
-    except TelegramBadRequest as e:
-        if "not modified" in str(e):  # tapped twice
-            return message
-    except (ValueError, TelegramAPIError):
-        pass
-    return await send_card(message.bot, message.chat.id, text, markup)
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except TelegramAPIError:
+        with suppress(TelegramAPIError):
+            await bot.edit_message_reply_markup(chat_id=chat_id, message_id=message_id)
+
+
+async def swap_card(message: Message, text: str, markup: InlineKeyboardMarkup | None) -> Message:
+    """Show `text` in place of the card that was tapped: the new card is sent while the old one is deleted.
+    Returns the new card."""
+    key, now = (message.chat.id, message.message_id), time.monotonic()
+    for old in [k for k, (at, _) in _swaps.items() if now - at > DOUBLE_TAP]:
+        del _swaps[old]
+    if key in _swaps:  # tapped twice: the first tap already brings the new card
+        return await _swaps[key][1]
+    sending = asyncio.ensure_future(send_card(message.bot, message.chat.id, text, markup))
+    _swaps[key] = (now, sending)
+    await remove_card(message.bot, message.chat.id, message.message_id)
+    try:
+        return await sending
+    except Exception:
+        _swaps.pop(key, None)
+        raise

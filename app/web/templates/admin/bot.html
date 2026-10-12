@@ -10,7 +10,7 @@
     <div class="value"><span class="live {{ 'on' if status.online else 'off' }}"></span>{{ t('bot_online') if status.online else t('bot_offline') }}</div>
     <div class="foot">{{ t('bot_seen', date=status.seen) if status.seen else t('bot_never') }}</div></div>
   <div class="kpi"><div class="label">{{ t('bot_in_bot') }}</div><div class="value">{{ num(in_bot) }}</div>
-    <div class="foot">{{ t('set_login_open') if settings.login_open else t('login_closed_short') }}</div></div>
+    <div class="foot">{% if is_programmer %}<a class="link" href="/admin/users">{{ t('nav_users') }} →</a>{% else %}{{ t('bot_in_bot_foot') }}{% endif %}</div></div>
   <div class="kpi"><div class="label">{{ t('bot_round') }}</div>
     <div class="value small-value">{{ open_round.title if open_round else '—' }}</div>
     <div class="foot">{% if open_round %}{{ t('closes_on', date=local_time(open_round.closes_at, '%d.%m.%Y')) }}{% else %}<a class="link" href="/admin/surveys">{{ t('bot_round_none') }} →</a>{% endif %}</div></div>
@@ -114,8 +114,8 @@
   <div class="card span-5">
     <div class="card-h"><div><h2>{{ t('bot_settings') }}</h2><div class="sub">{{ t('bot_settings_sub') }}</div></div></div>
     <form method="post" action="/admin/bot/settings" class="form">
-      {% for key in ['login_open', 'survey_comments', 'survey_comment_required', 'survey_edit', 'reminders', 'bot_reactions'] %}
-      {% set label = {'login_open': 'set_login_open', 'survey_comments': 'set_comments', 'survey_edit': 'set_edit',
+      {% for key in ['survey_comments', 'survey_comment_required', 'survey_edit', 'reminders', 'bot_reactions'] %}
+      {% set label = {'survey_comments': 'set_comments', 'survey_edit': 'set_edit',
                       'survey_comment_required': 'set_comment_required',
                       'reminders': 'set_reminders', 'bot_reactions': 'set_reactions'}[key] %}
       <label class="switch-row"><span class="switch"><input type="checkbox" name="{{ key }}" value="true" {{ 'checked' if settings[key] }}></span>
@@ -133,9 +133,6 @@
         <label class="field"><span class="lbl">{{ t('set_tech') }}</span>
           <input type="text" name="tech_contact" value="{{ settings.tech_contact }}" placeholder="{{ env.tech_contact }}" maxlength="64"></label>
       </div>
-      <label class="field"><span class="lbl">{{ t('set_admin_ids') }}</span>
-        <input type="text" name="admin_telegram_ids" value="{{ settings.admin_telegram_ids|join(', ') }}" placeholder="123456789">
-        <span class="hint">{{ t('set_admin_ids_hint') }}</span></label>
       <button class="btn primary" type="submit" data-tip="{{ t('tip_save') }}">{{ t('save') }}</button>
     </form>
   </div>

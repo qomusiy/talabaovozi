@@ -4,19 +4,19 @@ The timetable (downloaded from EduPage, or uploaded as Excel) says who teaches w
 Whenever a new timetable is stored:
 - the faculty's groups are created/updated (timetable name, course, language, EduPage id),
 - the faculty's teachers are created/updated (a fuller name uploaded from Excel is kept),
-- the current semester's assignments - which decide whom each student rates - are rebuilt from it,
+- the current semester's assignments - which decide whom a group's students rate - are rebuilt from it,
   unless the admins chose to upload assignments as Excel instead (setting `assignments_source`).
 """
 import re
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import settings_store
 from app.config import get_settings
 from app.faculty import display_code, group_key
-from app.models import (Group, ImportLog, Semester, Student, Subject, SurveyCampaign, Teacher, TeachingAssignment,
+from app.models import (Group, ImportLog, Semester, Subject, SurveyCampaign, Teacher, TeachingAssignment,
                         TimetableSnapshot)
 from app.services import departments
 from app.timetable import edupage
@@ -209,14 +209,15 @@ async def health(session: AsyncSession) -> dict:
     """What is set up and what needs attention - shown on the Data page."""
     semester = await current_semester(session)
     now = datetime.now(timezone.utc)
-    students = await session.scalar(select(func.count(Student.id)).where(Student.is_active))
-    temporary = await session.scalar(select(func.count(Student.id)).where(Student.is_active, Student.passport_temporary))
-    no_group = await session.scalar(select(func.count(Student.id)).where(Student.is_active, Student.group_id.is_(None)))
+    students = int(await session.scalar(select(func.coalesce(func.sum(Group.student_count), 0))) or 0)
+    sized = await session.scalar(select(func.count(Group.id)).where(Group.student_count > 0))
     assigned = (select(TeachingAssignment.group_id).join(Semester).where(Semester.is_current)).scalar_subquery()
+    # Groups with teachers but no student count: their participation can't be shown as "X of Y".
+    unsized = await session.scalar(select(func.count(Group.id)).where(
+        Group.id.in_(assigned), or_(Group.student_count.is_(None), Group.student_count == 0)))
     orphan_groups = (await session.execute(
-        select(Group.id, Group.name, func.count(Student.id)).join(Student, Student.group_id == Group.id)
-        .where(Student.is_active, Group.id.not_in(assigned)).group_by(Group.id).order_by(Group.name)
-    )).all()
+        select(Group.id, Group.name, Group.student_count).where(Group.student_count > 0, Group.id.not_in(assigned))
+        .order_by(Group.name))).all()
     assignments = await session.scalar(select(func.count(TeachingAssignment.id)).join(Semester).where(Semester.is_current))
     teachers = await session.scalar(select(func.count(func.distinct(TeachingAssignment.teacher_id)))
                                     .join(Semester).where(Semester.is_current))
@@ -225,6 +226,6 @@ async def health(session: AsyncSession) -> dict:
                                       .order_by(TimetableSnapshot.id.desc()).limit(1))).first()
     open_campaign = await session.scalar(select(SurveyCampaign).where(SurveyCampaign.opens_at <= now,
                                                                       SurveyCampaign.closes_at > now).limit(1))
-    return {"semester": semester, "students": students, "temporary": temporary, "no_group": no_group,
+    return {"semester": semester, "students": students, "sized_groups": sized, "unsized_groups": unsized,
             "orphan_groups": [{"id": i, "name": n, "students": c} for i, n, c in orphan_groups],
             "assignments": assignments, "teachers": teachers, "snapshot": snapshot, "open_campaign": open_campaign}

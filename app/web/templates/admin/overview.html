@@ -126,7 +126,7 @@
     {% for c in comments %}
     <div class="comment">
       <div><div class="head"><a href="{{ url('/admin/teachers/' ~ c.teacher_id) }}">{{ c.teacher }}</a>
-        <span class="sub">{% if show_who %}{{ c.student }} · {% endif %}{{ c.group }} · {{ c.date }}</span></div><p>{{ c.comment }}</p></div>
+        <span class="sub">{% if show_who and c.user_id %}<a class="link" href="/admin/users/{{ c.user_id }}">{{ c.who }}</a> · {% endif %}{{ grp(c.group) or '—' }} · {{ c.date }}</span></div><p>{{ c.comment }}</p></div>
       <div>{{ ui.pill(c.overall) }}</div>
     </div>
     {% else %}{{ ui.empty('message', t('comments_none')) }}{% endfor %}

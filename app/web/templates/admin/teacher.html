@@ -84,7 +84,7 @@
   <table id="data-table">
     <thead><tr>
       <th class="sortable" data-type="text">{{ t('col_date') }}</th>
-      <th class="sortable" data-type="text">{{ t('col_student') if show_who else t('col_group') }}</th>
+      <th class="sortable" data-type="text">{{ t('col_who') if show_who else t('col_group') }}</th>
       {% for key in criteria %}<th class="sortable r" data-type="num" data-tip="{{ criteria[key] }}">{{ t('cs_' ~ key) }}</th>{% endfor %}
       <th class="sortable r" data-type="num">{{ t('overall') }}</th>
       <th>{{ t('col_comment') }}</th>
@@ -93,7 +93,7 @@
     {% for f in d.feedback %}
       <tr data-has-comment="{{ 1 if f.comment else 0 }}">
         <td class="num muted" data-v="{{ f.date[6:] ~ f.date[3:5] ~ f.date[:2] }}">{{ f.date }}</td>
-        <td data-v="{{ f.student if show_who else f.group }}">{% if show_who %}{{ ui.person(f.student, f.group) }}{% else %}{{ f.group or '—' }}{% endif %}</td>
+        <td data-v="{{ f.who if show_who else f.group }}">{% if show_who and f.user_id %}{{ ui.person(f.who, f.group, '/admin/users/' ~ f.user_id) }}{% else %}{{ f.group or '—' }}{% endif %}</td>
         {% for key in criteria %}<td class="r" data-v="{{ f[key] }}">{{ f[key] }}</td>{% endfor %}
         <td class="r" data-v="{{ f.overall }}">{{ ui.pill(f.overall) }}</td>
         <td class="wrap">{{ f.comment or '' }}</td>

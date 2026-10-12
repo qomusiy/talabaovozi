@@ -3,10 +3,11 @@
 Telegram doesn't let a bot read its chat history, so the bot writes it down as it goes:
 - what people send (and which button they tapped) - IncomingLog, a dispatcher middleware;
 - what the bot sends, edits and deletes - OutgoingLog, on the bot's connection, so every way of sending is
-  covered: the bot's answers, messages to students from the dashboard, reminders, the programmer's replies.
+  covered: the bot's answers, messages to users from the dashboard, reminders, the programmer's replies.
 
-An edit changes the stored message, as it changes the message in the chat. Passport numbers are never stored:
-the passport step of logging in is replaced by dots, and anything that looks like one is masked.
+An edit changes the stored message, as it changes the message in the chat. Anything that looks like a passport
+number is masked (people still send them out of habit). Messages of blocked users are logged too - the programmer
+needs to see what they sent.
 """
 import logging
 import re
@@ -33,7 +34,6 @@ origin: ContextVar[str] = ContextVar("chat_origin", default="bot")   # bot / bro
 actor: ContextVar[int | None] = ContextVar("chat_actor", default=None)  # the dashboard account sending from the panel
 
 PASSPORT = re.compile(r"\b[A-Za-z]{2}\s?\d{7}\b")
-HIDDEN_PASSPORT = "🔒 •• ••••••• (pasport)"
 SENDS = (SendMessage, SendPhoto, SendVideo, SendDocument, SendAnimation, SendAudio, SendVoice, SendSticker, SendVideoNote)
 EDITS = (EditMessageText, EditMessageCaption, EditMessageMedia, EditMessageReplyMarkup)
 PREVIEW = {"photo": "📷", "video": "🎬", "document": "📎", "sticker": "", "voice": "🎤", "audio": "🎵",
@@ -80,12 +80,12 @@ def preview(kind: str, html: str | None) -> str:
     return (f"{icon} {plain}" if icon and plain else plain or icon or "…")[:200]
 
 
-async def _chat(session, chat_id: int, direction: str, text: str, *, name=None, username=None, student_id=None,
+async def _chat(session, chat_id: int, direction: str, text: str, *, name=None, username=None,
                 blocked: bool | None = None) -> None:
     now = datetime.now(timezone.utc)
     values = {"chat_id": chat_id, "last_at": now, "last_text": text[:255], "last_dir": direction}
     changes = dict(values)
-    for key, value in (("name", name), ("username", username), ("student_id", student_id), ("blocked", blocked)):
+    for key, value in (("name", name), ("username", username), ("blocked", blocked)):
         if value is not None:
             values[key] = changes[key] = value
     stmt = pg_insert(BotChat).values(**values)
@@ -96,7 +96,7 @@ async def _chat(session, chat_id: int, direction: str, text: str, *, name=None, 
 # ---------------------------------------------------------------- incoming
 
 class IncomingLog(BaseMiddleware):
-    """Register after ContextMiddleware: it uses the `student` that middleware finds."""
+    """Register before ContextMiddleware, so updates it stops (blocked users) are logged too."""
 
     async def __call__(self, handler, event: Update, data: dict):
         try:
@@ -107,12 +107,9 @@ class IncomingLog(BaseMiddleware):
 
 
 async def record_in(event: Update, data: dict) -> None:
-    student = data.get("student")
     if event.message and event.message.chat.type == "private":
         m = event.message
         kind, text, file_id = describe(m)
-        if data.get("raw_state") == "Login:passport" and kind == "text":
-            text = escape(HIDDEN_PASSPORT)
         row = BotMessage(chat_id=m.chat.id, message_id=m.message_id, dir="in", kind=kind, text=text, file_id=file_id)
         user = m.from_user
     elif event.callback_query and event.callback_query.message:
@@ -131,8 +128,7 @@ async def record_in(event: Update, data: dict) -> None:
     async with session_scope() as session:
         session.add(row)
         await _chat(session, row.chat_id, row.dir, preview(row.kind, row.text) if row.dir == "in" else f"👆 {label}",
-                    name=name, username=(user.username if user else None) or None,
-                    student_id=student.id if student else None, blocked=False)
+                    name=name, username=(user.username if user else None) or None, blocked=False)
 
 
 # ---------------------------------------------------------------- outgoing

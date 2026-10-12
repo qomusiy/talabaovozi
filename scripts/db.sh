@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Manage the local development Postgres (runs in Docker on 127.0.0.1:5433).
+# The database on Linux: PostgreSQL 16 in Docker on 127.0.0.1:5433 - it starts with Docker, so with the computer.
 # Usage: scripts/db.sh start | stop | status | psql | reset
 set -euo pipefail
 NAME=feedback-db

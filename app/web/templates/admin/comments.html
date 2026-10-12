@@ -27,7 +27,7 @@
       <label class="select" data-tip="{{ t('tip_group') }}">{{ icon('groups') }}
         <select name="group" onchange="this.form.submit()" aria-label="{{ t('col_group') }}">
           <option value="">{{ t('all_groups') }}</option>
-          {% for g in groups %}<option value="{{ g.id }}" {{ 'selected' if g.id == group_id }}>{{ g.name }}</option>{% endfor %}
+          {% for g in groups %}<option value="{{ g.id }}" {{ 'selected' if g.id == group_id }}>{{ grp(g.name) }}</option>{% endfor %}
         </select></label>
       <button class="btn primary" type="submit" data-tip="{{ t('tip_search') }}">{{ t('search') }}</button>
     </form>
@@ -37,7 +37,7 @@
     <div class="comment">
       <div>
         <div class="head"><a href="{{ url('/admin/teachers/' ~ c.teacher_id) }}">{{ c.teacher }}</a>
-          <span class="sub">{% if show_who %}{{ c.student }} · {% endif %}{{ c.group }} · {{ c.date }}</span></div>
+          <span class="sub">{% if show_who and c.user_id %}<a class="link" href="/admin/users/{{ c.user_id }}">{{ c.who }}</a> · {% endif %}{{ grp(c.group) or '—' }} · {{ c.date }}</span></div>
         <p>{{ c.comment }}</p>
         <div class="scores">{% for key in criteria %}<span>{{ t('cs_' ~ key) }} <b>{{ c[key] }}</b></span>{% endfor %}</div>
       </div>

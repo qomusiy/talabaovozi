@@ -2,11 +2,11 @@
 
 Each template has
 - the sheet(s) to fill in, with headers the importers know, an explanation on every header (hover it in Excel),
-  drop-down lists filled from the database (groups, teachers, kafedras, lesson types) and HEMIS / passport columns
-  kept as text, so Excel doesn't turn 376231103290 into 3.76E+11;
+  drop-down lists filled from the database (groups, teachers, kafedras, lesson types) and id columns kept as text,
+  so Excel doesn't turn 376231103290 into 3.76E+11;
 - "Yo‘riqnoma": what each column means, which are required, how the upload works;
 - "Namuna": a filled-in example. It is never imported - only the sheets to fill in are.
-Two uploads take one file for two things: students with their passport codes, and teachers with who teaches whom.
+The teachers upload takes one file for two things: teachers, and who teaches whom.
 """
 from dataclasses import dataclass, field
 from io import BytesIO
@@ -33,7 +33,7 @@ class Column:
     note: str                 # shown on the header and in Yo‘riqnoma
     width: int = 18
     required: bool = False
-    text: bool = False        # keep as text (ids, passport codes)
+    text: bool = False        # keep as text (long ids)
     choices: str | None = None  # name of a list: groups / teachers / departments / types / days / weeks / periods
     strict: bool = False      # only values from the list
 
@@ -47,23 +47,24 @@ class Sheet:
 
 TEMPLATES: dict[str, dict] = {
     "students": {
-        "title": "Talabalar ro‘yxati",
+        "title": "Guruhlardagi talabalar soni",
         "intro": [
-            "HEMIS’dan olingan talabalar ro‘yxati. Bitta faylda talabalar ham, ularning pasport kodlari ham.",
-            "Faqat «HEMIS ID» majburiy. Yangi talaba uchun F.I.Sh. va Guruh ham kerak.",
-            "Pasport bo‘lmasa, talabaga vaqtinchalik kod beriladi (Talabalar sahifasida ko‘rinadi).",
-            "Faqat pasportlarni yangilash uchun HEMIS ID va Pasport ustunlarini to‘ldirish kifoya.",
-            "Yangi semestrda «Faylda yo‘q talabalarni o‘chirish» belgisi bilan yuklang.",
+            "Har bir guruhda nechta talaba borligi — «qancha talabadan qanchasi so‘rovnomada qatnashdi» uchun.",
+            "So‘rovnoma anonim: talabalarning ismlari kerak emas va saqlanmaydi — faqat sonlar.",
+            "Ikki usul: har bir guruhga bitta qator va «Talabalar soni»; yoki HEMIS’dan olingan ro‘yxat "
+            "(har talabaga bitta qator) — bot ularni guruh bo‘yicha o‘zi sanaydi.",
+            "Yangi semestrda «Faylda yo‘q guruhlar sonini tozalash» belgisi bilan yuklang.",
+            "«Raqami» ustuni ixtiyoriy: talabalar biladigan guruh raqamlarini (302, 306, ...) bir yo‘la kiritish uchun. "
+            "Faqat Guruh va Raqami to‘ldirilgan qator talabalar sonini o‘zgartirmaydi.",
         ],
-        "sheets": [Sheet("Talabalar", [
-            Column("HEMIS ID", "Talabaning HEMIS raqami, masalan 376231103290. Har talaba bir marta.", 18, True, True),
-            Column("F.I.Sh.", "Familiya, ism, sharif — HEMIS’dagidek.", 36),
-            Column("Guruh", "Guruh nomi, dars jadvalidagidek: 25-16 IQT, 26-03 IQT (ru).", 18, choices="groups"),
-            Column("Pasport", "Pasport seriyasi va raqami: AB1234567. Bot shu bilan talabani tanib oladi. "
-                   "Hech qayerda saqlanmaydi — faqat shifrlangan izi.", 16, text=True),
+        "sheets": [Sheet("Guruhlar", [
+            Column("Guruh", "Guruh nomi, dars jadvalidagidek: 25-16 IQT, 26-03 IQT (ru).", 20, True, choices="groups"),
+            Column("Talabalar soni", "Guruhdagi talabalar soni. HEMIS ro‘yxatini yuklasangiz, bo‘sh qoldiring — "
+                   "har bir qator bitta talaba deb sanaladi.", 16),
             Column("Kurs", "1–4. Bo‘sh qolsa, guruh nomidan aniqlanadi.", 8),
-        ], [["376231103290", "Karimov Aziz Anvar o‘g‘li", "25-16 IQT", "AD1231212", 2],
-            ["376231103291", "Saidova Madina Rustam qizi", "26-03 IQT (ru)", "", 1]])],
+            Column("Raqami", "Talabalar guruhni biladigan raqam, masalan 302 — botda guruh nomi o‘rniga shu chiqadi. "
+                   "Bo‘sh qolsa, o‘zgarmaydi.", 10),
+        ], [["25-16 IQT", 28, 2, "216"], ["26-03 IQT (ru)", 25, 1, "103"]])],
     },
     "teaching": {
         "title": "O‘qituvchilar va biriktirishlar",
@@ -74,7 +75,7 @@ TEMPLATES: dict[str, dict] = {
             "«O‘qituvchilar»: dars jadvalidagi o‘qituvchilarga ma’lumot qo‘shiladi (jadvaldagi ismi bo‘yicha topiladi).",
             "«Biriktirishlar» to‘ldirilsa, joriy semestrdagi biriktirishlar shu fayldagilar bilan almashadi va "
             "dars jadvali ularni boshqa o‘zgartirmaydi (Ma’lumotlar sahifasida yana jadvalga qaytarish mumkin).",
-            "Talaba o‘z guruhiga biriktirilgan o‘qituvchilarni baholaydi.",
+            "Talaba botda tanlagan guruhiga biriktirilgan o‘qituvchilarni baholaydi.",
         ],
         "sheets": [
             Sheet("O‘qituvchilar", [

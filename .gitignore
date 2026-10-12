@@ -10,11 +10,10 @@ data/real/
 tools/
 data/runtime/
 # Real personal data and uploads - never commit
-talaba_excel.xlsx
 /*.xlsx
 data/uploads/
 data/backups/
 data/media/
-# scripts/backup.sh transfer: secrets + all student data - never commit
+# server.sh / server.bat transfer: secrets + all student data - never commit
 talaba-transfer-*.tar.gz
 *.sql.gz

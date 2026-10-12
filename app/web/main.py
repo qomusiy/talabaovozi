@@ -15,6 +15,7 @@ from app.web.admin import chats as admin_chats
 from app.web.admin import dev as admin_dev
 from app.web.admin import manage as admin_manage
 from app.web.admin import records as admin_records
+from app.web.admin import users as admin_users
 from app.web.admin import views as admin_views
 from app.web.deps import LoginRequired, is_local_request
 from app.web.security import SECURITY_HEADERS, same_origin
@@ -49,6 +50,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_records.router)
     app.include_router(admin_dev.router)
     app.include_router(admin_chats.router)
+    app.include_router(admin_users.router)
 
     @app.middleware("http")
     async def protect_admin(request: Request, call_next):
@@ -73,7 +75,7 @@ def create_app() -> FastAPI:
 
     @app.get("/healthz", include_in_schema=False)
     async def healthz():
-        """The tunnel watchdog (scripts/tunnel.sh) checks the public address with this."""
+        """The server (app.server) checks the public address with this."""
         return PlainTextResponse("ok")
 
     return app

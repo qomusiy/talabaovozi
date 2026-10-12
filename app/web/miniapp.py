@@ -31,7 +31,7 @@ TEXTS = {
            "student": "Talaba", "links": "Manzillar", "survey_link": "So‘rovnoma", "admin_link": "Admin sayt",
            "admin_closed": "Internetda yopiq — faqat server kompyuterida", "copy": "Nusxa", "copied": "Nusxa olindi",
            "open_link": "Ochish", "refresh": "Yangilash", "no_survey": "Hali so‘rovnoma o‘tkazilmagan",
-           "in_bot": "Botdagi talabalar", "site": "Sayt", "site_ok": "ishlayapti", "site_down": "ishlamayapti",
+           "in_bot": "Botdagi foydalanuvchilar", "site": "Sayt", "site_ok": "ishlayapti", "site_down": "ishlamayapti",
            "site_starting": "ishga tushmoqda", "site_unknown": "noma’lum", "site_none": "manzil yo‘q",
            "not_admin": "Bu bo‘lim faqat Talaba Ovozi adminlari uchun. Admin saytdagi «Mening hisobim › Telegram» "
                         "orqali hisobingizni ulang.",
@@ -45,7 +45,7 @@ TEXTS = {
            "student": "Student", "links": "Addresses", "survey_link": "Survey", "admin_link": "Dashboard",
            "admin_closed": "Closed to the internet — only on the server computer", "copy": "Copy", "copied": "Copied",
            "open_link": "Open", "refresh": "Refresh", "no_survey": "No survey has been run yet",
-           "in_bot": "Students in the bot", "site": "Site", "site_ok": "working", "site_down": "down",
+           "in_bot": "Users in the bot", "site": "Site", "site_ok": "working", "site_down": "down",
            "site_starting": "starting", "site_unknown": "unknown", "site_none": "no address",
            "not_admin": "This is for Talaba Ovozi admins only. Link your account in the dashboard: «My account › Telegram».",
            "open_in_telegram": "This page opens inside the Telegram bot.", "error": "Couldn’t load the data."},
@@ -58,7 +58,7 @@ TEXTS = {
            "student": "Студент", "links": "Адреса", "survey_link": "Опрос", "admin_link": "Админ-сайт",
            "admin_closed": "Закрыт для интернета — только на компьютере-сервере", "copy": "Копировать",
            "copied": "Скопировано", "open_link": "Открыть", "refresh": "Обновить", "no_survey": "Опросов ещё не было",
-           "in_bot": "Студентов в боте", "site": "Сайт", "site_ok": "работает", "site_down": "не работает",
+           "in_bot": "Пользователей в боте", "site": "Сайт", "site_ok": "работает", "site_down": "не работает",
            "site_starting": "запускается", "site_unknown": "неизвестно", "site_none": "нет адреса",
            "not_admin": "Раздел только для админов Talaba Ovozi. Привяжите аккаунт на админ-сайте: «Мой аккаунт › Telegram».",
            "open_in_telegram": "Эта страница открывается внутри Telegram-бота.", "error": "Не удалось загрузить данные."},
@@ -95,7 +95,7 @@ async def data(who: tuple = Depends(telegram_admin), session: AsyncSession = Dep
     if s["campaign"]:
         for c in await an.latest_comments(session, s["campaign"]["id"], limit=6):
             comments.append({"teacher": c["teacher"], "group": c["group"], "date": c["date"], "overall": c["overall"],
-                             "comment": c["comment"], "student": c["student"] if admin.sees_identity else None})
+                             "comment": c["comment"], "student": c["who"] if admin.sees_identity else None})
     online = not get_settings().admin_local_only or await settings_store.get(session, "admin_online")
     url = s["site"]["url"]
     return {"lang": lang, "texts": texts(lang),

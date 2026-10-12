@@ -1,32 +1,29 @@
 #!/usr/bin/env bash
-# Make this computer the Talaba Ovozi server (Ubuntu 24.04 / Debian), right after `git clone`.
+# Make this Linux computer (Ubuntu 24.04 / Debian) the Talaba Ovozi server, right after `git clone`.
 # On Windows use scripts\setup.bat instead.
 #
-#   scripts/setup.sh ~/talaba-transfer-….tar.gz   # moving from another computer (made there: scripts/backup.sh transfer)
+#   scripts/setup.sh ~/talaba-transfer-….tar.gz   # moving from another computer (made there: server.sh transfer)
 #   scripts/setup.sh                              # a fresh start, without data
 #
-# It installs what is missing (Docker, the Python packages, cloudflared or Tailscale), restores the data, and
-# installs the services (scripts/server.sh install): from then on the database, the web server, the bot and the
-# public address start by themselves whenever the computer is switched on - nobody has to log in.
+# It installs what is missing (Docker for the database, the Python packages, cloudflared or Tailscale), restores the
+# data, and installs the service "talaba" (scripts/server.sh install): from then on the database and the server -
+# web, bot, public address - start by themselves whenever the computer is switched on, nobody has to log in.
 # Safe to run again (it skips what is done) - e.g. after a restart it asked for, or after changing TUNNEL in .env.
 set -euo pipefail
-cd "$(dirname "$0")/.."
 BUNDLE=${1:-}
 if [ -n "$BUNDLE" ]; then
   [ -f "$BUNDLE" ] || { echo "❌ No such file: $BUNDLE"; exit 1; }
   BUNDLE=$(realpath "$BUNDLE")
 fi
+cd "$(dirname "$0")/.."
 DB=feedback-db
-IS_WSL=false
-grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null && IS_WSL=true
 env_get() { sed -n "s/^$1=//p" .env 2>/dev/null | tail -1 | tr -d "\"'\r"; }
 env_set() { if grep -q "^$1=" .env; then sed -i "s|^$1=.*|$1=$2|" .env; else echo "$1=$2" >> .env; fi; }
 step() { echo; echo "── $*"; }
 
 step "1/5 System packages"
-if [ "$(ps -p 1 -o comm=)" != systemd ]; then   # it starts everything at boot
-  echo "❌ systemd is not running."
-  $IS_WSL && echo "   WSL: add [boot] systemd=true to /etc/wsl.conf, then in PowerShell: wsl --shutdown"
+if [ "$(ps -p 1 -o comm=)" != systemd ]; then   # it starts the server at boot
+  echo "❌ systemd is not running (on Windows use scripts\\setup.bat)"
   exit 1
 fi
 missing=()
@@ -43,22 +40,12 @@ systemctl is-enabled --quiet docker 2>/dev/null || sudo systemctl enable --now d
 if ! docker info >/dev/null 2>&1; then   # exit code 3 = "restart, then run me again"
   id -nG | grep -qw docker || sudo usermod -aG docker "$USER"
   echo
-  if $IS_WSL; then
-    echo "ℹ️  Docker works without sudo only after Ubuntu restarts. In PowerShell: wsl --terminate ${WSL_DISTRO_NAME:-Ubuntu-24.04}"
-  else
-    echo "ℹ️  Docker works without sudo only after a restart. Restart the computer (sudo reboot)."
-  fi
+  echo "ℹ️  Docker works without sudo only after a restart. Restart the computer (sudo reboot)."
   echo "   Then run the same command again:  scripts/setup.sh ${BUNDLE}"
   exit 3
 fi
-if docker info --format '{{.OperatingSystem}}' 2>/dev/null | grep -q "Docker Desktop"; then
-  echo "❌ This is Docker Desktop: it runs only while someone is signed in to Windows, so the database wouldn't start"
-  echo "   at boot. Docker Desktop › Settings › Resources › WSL integration: switch it off for this Ubuntu, run this again."
-  exit 1
-fi
 # A server must not fall asleep (Ubuntu suspends an idle computer by default). Undo: sudo systemctl unmask …
-# (In WSL Windows decides that.)
-if ! $IS_WSL && [ "$(systemctl is-enabled suspend.target 2>/dev/null)" != masked ]; then
+if [ "$(systemctl is-enabled suspend.target 2>/dev/null)" != masked ]; then
   echo "Switching off sleep / suspend - this computer is a server now"
   sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target >/dev/null
 fi
@@ -72,29 +59,37 @@ echo "✅ .venv"
 
 step "3/5 Settings (.env) and data"
 scripts/db.sh start
-db_empty() {
-  local r
-  r=$(docker exec "$DB" psql -U feedback -d feedback -Atc "select to_regclass('public.students') is null") \
-    || { echo "❌ The database doesn't answer (scripts/db.sh status)"; exit 1; }
-  [ "$r" = t ]
+db_empty() {   # no tables yet, or no admin accounts and no ratings in them
+  [ "$(docker exec "$DB" psql -U feedback -d feedback -Atc \
+      "select (select count(*) from admins) + (select count(*) from feedback)" 2>/dev/null || echo 0)" = 0 ]
 }
 if [ -n "$BUNDLE" ]; then
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
   tar -xzf "$BUNDLE" -C "$tmp"
-  if db_empty; then
-    # The database and its .env belong together: passports are hashed with SECRET_KEY.
-    if [ -f .env ] && ! cmp -s .env "$tmp/.env"; then
-      cp .env ".env.old-$(date +%F_%H%M)" && echo "ℹ️  The .env that was here is kept as .env.old-…"
+  [ -f "$tmp/.env" ] || { echo "❌ $BUNDLE is not a transfer file (there is no .env in it)"; exit 1; }
+  replace=
+  if ! db_empty; then   # set up before: this computer has data of its own
+    read -r -p "This computer's database already has data. Replace it with the data from $(basename "$BUNDLE")? (a copy of it is saved first) [y/N] " answer
+    case "$answer" in [yY]*|ha|Ha) replace=1 ;; esac
+  fi
+  if db_empty || [ -n "$replace" ]; then
+    if [ -n "$replace" ]; then   # this computer keeps its own .env (its address settings); only the data comes
+      systemctl --user stop talaba 2>/dev/null || true
+      .venv/bin/python -m app.backup now
+    else
+      if [ -f .env ] && ! cmp -s .env "$tmp/.env"; then
+        cp .env ".env.old-$(date +%F_%H%M)" && echo "ℹ️  The .env that was here is kept as .env.old-…"
+      fi
+      cp "$tmp/.env" .env
     fi
-    cp "$tmp/.env" .env
     dump=$(ls -1 "$tmp"/data/backups/feedback-*.sql.gz | head -1)
     mkdir -p data/backups && cp "$dump" data/backups/
-    gunzip -c "$dump" | docker exec -i -e PGOPTIONS=--client-min-messages=warning "$DB" \
-      psql -q -v ON_ERROR_STOP=1 -U feedback -d feedback >/dev/null
+    .venv/bin/python -c 'import sys; from pathlib import Path; from app import backup; backup.restore(Path(sys.argv[1]))' \
+      "$dump"
     echo "✅ Database restored from $(basename "$dump")"
   else
-    echo "ℹ️  The database already has data - it was not replaced (to replace it: scripts/backup.sh restore <file>)"
+    echo "ℹ️  The data that was here is kept (the transfer file's data was not used)"
     [ -f .env ] || cp "$tmp/.env" .env
   fi
   for d in media uploads runtime/chatfiles; do
@@ -155,9 +150,9 @@ case "$MODE" in
     command -v tailscale >/dev/null || curl -fsSL https://tailscale.com/install.sh | sh
     if ! tailscale status >/dev/null 2>&1; then
       echo "Log in to Tailscale: open the link below and sign in (a free account - Google, GitHub or Microsoft)"
-      sudo tailscale up --hostname=talaba-ovozi --accept-dns=false   # a server needs no tailnet names (WSL: keeps its DNS)
+      sudo tailscale up --hostname=talaba-ovozi --accept-dns=false   # a server needs no tailnet names
     fi
-    sudo tailscale set --operator="$USER"   # the talaba-tunnel service may then manage Funnel without sudo
+    sudo tailscale set --operator="$USER"   # the server may then manage Funnel without sudo
     echo "Turning on Funnel. If a link appears, open it, allow Funnel, and wait here."
     tailscale funnel --bg 8000
     echo "✅ Tailscale Funnel" ;;
@@ -165,7 +160,7 @@ case "$MODE" in
     echo "❌ TUNNEL=$MODE in .env - use quick, tailscale or cloudflare"; exit 1 ;;
 esac
 
-step "5/5 Services (they start by themselves when the computer is switched on)"
+step "5/5 The service (the server starts by itself when the computer is switched on)"
 # Start at boot, before anyone logs in.
 [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" = yes ] || sudo loginctl enable-linger "$USER"
 scripts/server.sh install

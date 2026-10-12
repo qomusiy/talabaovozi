@@ -1,6 +1,7 @@
 """The bot for dashboard accounts linked to Telegram (app.services.admin_link): a card with the survey's numbers,
-the site's addresses (sent here by itself when they change), details, a Mini App with charts, and switches.
-Students never see any of it; viewers see the numbers, superadmins can also ask for a new public address."""
+the site's addresses, details, a Mini App with charts, and switches - server status messages (app.bot.server_alerts)
+and the daily report, both off until switched on. Other users never see any of it; viewers see the numbers,
+superadmins can also ask for a new public address."""
 from contextlib import suppress
 from datetime import datetime
 from html import escape
@@ -13,12 +14,13 @@ from aiogram.types import (BotCommand, BotCommandScopeChat, CallbackQuery, Inlin
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import audit, settings_store
+from app.bot import server_alerts
 from app.bot.admin_i18n import ta
-from app.bot.cards import edit_card, send_card
+from app.bot.cards import send_card, swap_card
 from app.bot.handlers.menu import TASHKENT
 from app.bot.i18n import t
 from app.config import get_settings
-from app.models import Admin, Student
+from app.models import Admin
 from app.runtime import fixed_address, request_tunnel_restart
 from app.services import admin_link, admin_stats
 from app.web.admin.i18n import translator
@@ -58,7 +60,7 @@ def survey_text(lang: str, s: dict) -> str:
               completed=s["completed"], today=s["today"], comments=s["comments"])
 
 
-async def admin_card(session: AsyncSession, admin: Admin, lang: str, student: Student | None) -> tuple:
+async def admin_card(session: AsyncSession, admin: Admin, lang: str) -> tuple:
     lang = admin_lang(lang)
     s = await admin_stats.snapshot(session)
     name = escape((admin.telegram_name or admin.username).split()[0])
@@ -70,15 +72,13 @@ async def admin_card(session: AsyncSession, admin: Admin, lang: str, student: St
         rows.append([InlineKeyboardButton(text=ta(lang, "btn_app"),
                                           web_app=WebAppInfo(url=f"{s['site']['url']}/miniapp/admin"))])
     rows += [[_b(ta(lang, "btn_links"), "adm:links"), _b(ta(lang, "btn_stats"), "adm:stats")],
-             [_b(ta(lang, "btn_notify_on" if prefs.get("tg_notify", True) else "btn_notify_off"), "adm:notify"),
+             [_b(ta(lang, "btn_notify_on" if prefs.get("tg_server") else "btn_notify_off"), "adm:notify"),
               _b(ta(lang, "btn_daily_on" if prefs.get("tg_daily") else "btn_daily_off"), "adm:daily")]]
     tools = [_b(ta(lang, "btn_refresh"), "adm:home")]
     if admin.is_super and not fixed_address():
         tools.append(_b(ta(lang, "btn_tunnel"), "adm:tunnel"))
     rows.append(tools)
-    if student is not None:
-        rows.append([_b(ta(lang, "btn_student"), "home")])
-    rows.append([_b(ta(lang, "btn_unlink"), "adm:unlink")])
+    rows.append([_b(ta(lang, "btn_student"), "home"), _b(ta(lang, "btn_unlink"), "adm:unlink")])
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -125,9 +125,8 @@ async def stats_text(session: AsyncSession, lang: str) -> str:
                                       for k in ("teaching", "fairness", "professionalism")})
 
 
-async def send_admin_home(message: Message, session: AsyncSession, admin: Admin, lang: str,
-                          student: Student | None) -> None:
-    await send_card(message.bot, message.chat.id, *await admin_card(session, admin, lang, student))
+async def send_admin_home(message: Message, session: AsyncSession, admin: Admin, lang: str) -> None:
+    await send_card(message.bot, message.chat.id, *await admin_card(session, admin, lang))
 
 
 async def set_admin_commands(bot: Bot, chat_id: int, lang: str) -> None:
@@ -151,8 +150,8 @@ async def welcome_linked(message: Message, admin: Admin, lang: str) -> None:
 # ---------------------------------------------------------------- commands
 
 @router.message(Command("admin"), is_admin)
-async def admin_cmd(message: Message, session: AsyncSession, admin: Admin, student: Student | None, lang: str) -> None:
-    await send_admin_home(message, session, admin, lang, student)
+async def admin_cmd(message: Message, session: AsyncSession, admin: Admin, lang: str) -> None:
+    await send_admin_home(message, session, admin, lang)
 
 
 @router.message(Command("link"), is_admin)
@@ -164,33 +163,35 @@ async def link_cmd(message: Message, session: AsyncSession, lang: str) -> None:
 # ---------------------------------------------------------------- the card's buttons
 
 @router.callback_query(F.data == "adm:home", is_admin)
-async def home_cb(call: CallbackQuery, session: AsyncSession, admin: Admin, student: Student | None, lang: str) -> None:
-    await edit_card(call.message, *await admin_card(session, admin, lang, student))
+async def home_cb(call: CallbackQuery, session: AsyncSession, admin: Admin, lang: str) -> None:
+    await swap_card(call.message, *await admin_card(session, admin, lang))
     await call.answer()
 
 
 @router.callback_query(F.data == "adm:links", is_admin)
 async def links_cb(call: CallbackQuery, session: AsyncSession, lang: str) -> None:
-    await edit_card(call.message, *await links_card(session, lang))
+    await swap_card(call.message, *await links_card(session, lang))
     await call.answer()
 
 
 @router.callback_query(F.data == "adm:stats", is_admin)
 async def stats_cb(call: CallbackQuery, session: AsyncSession, lang: str) -> None:
-    await edit_card(call.message, await stats_text(session, lang), back(admin_lang(lang)))
+    await swap_card(call.message, await stats_text(session, lang), back(admin_lang(lang)))
     await call.answer()
 
 
 @router.callback_query(F.data.in_({"adm:notify", "adm:daily"}), is_admin)
-async def toggle_cb(call: CallbackQuery, session: AsyncSession, admin: Admin, student: Student | None,
-                    lang: str) -> None:
-    key, default = ("tg_notify", True) if call.data == "adm:notify" else ("tg_daily", False)
+async def toggle_cb(call: CallbackQuery, session: AsyncSession, admin: Admin, lang: str) -> None:
+    key = "tg_server" if call.data == "adm:notify" else "tg_daily"
     prefs = dict(admin.prefs or {})
-    prefs[key] = not prefs.get(key, default)
+    prefs[key] = not prefs.get(key, False)
     admin.prefs = prefs
-    name = {"tg_notify": "notify", "tg_daily": "daily"}[key]
+    name = {"tg_server": "notify", "tg_daily": "daily"}[key]
     await call.answer(ta(admin_lang(lang), f"{name}_{'on' if prefs[key] else 'off'}"))
-    await edit_card(call.message, *await admin_card(session, admin, lang, student))
+    await swap_card(call.message, *await admin_card(session, admin, lang))
+    if key == "tg_server" and prefs[key]:  # switched on: how things are right now
+        await session.commit()
+        await server_alerts.send_now(call.bot, call.message.chat.id, admin_lang(lang))
 
 
 @router.callback_query(F.data == "adm:tunnel", is_admin)
@@ -199,7 +200,7 @@ async def tunnel_ask(call: CallbackQuery, admin: Admin, lang: str) -> None:
     if not admin.is_super:
         await call.answer(ta(lang, "super_only"), show_alert=True)
         return
-    await edit_card(call.message, ta(lang, "tunnel_confirm"), InlineKeyboardMarkup(inline_keyboard=[
+    await swap_card(call.message, ta(lang, "tunnel_confirm"), InlineKeyboardMarkup(inline_keyboard=[
         [_b(ta(lang, "btn_tunnel_yes"), "adm:tunnel:yes")], [_b(ta(lang, "btn_back"), "adm:home")]]))
     await call.answer()
 
@@ -212,14 +213,14 @@ async def tunnel_yes(call: CallbackQuery, session: AsyncSession, admin: Admin, l
         return
     request_tunnel_restart()
     await audit.bot_action(session, admin, "/bot/tunnel", "Telegram › Yangi manzil olish")
-    await edit_card(call.message, ta(lang, "tunnel_done"), back(lang))
+    await swap_card(call.message, ta(lang, "tunnel_done"), back(lang))
     await call.answer()
 
 
 @router.callback_query(F.data == "adm:unlink", is_admin)
 async def unlink_ask(call: CallbackQuery, lang: str) -> None:
     lang = admin_lang(lang)
-    await edit_card(call.message, ta(lang, "unlink_confirm"), InlineKeyboardMarkup(inline_keyboard=[
+    await swap_card(call.message, ta(lang, "unlink_confirm"), InlineKeyboardMarkup(inline_keyboard=[
         [_b(ta(lang, "btn_unlink_yes"), "adm:unlink:yes")], [_b(ta(lang, "btn_back"), "adm:home")]]))
     await call.answer()
 
@@ -230,7 +231,7 @@ async def unlink_yes(call: CallbackQuery, session: AsyncSession, admin: Admin, l
     await audit.bot_action(session, admin, "/bot/unlink", "Telegram › Botdan uzish")
     with suppress(TelegramAPIError):
         await call.bot.delete_my_commands(scope=BotCommandScopeChat(chat_id=call.message.chat.id))
-    await edit_card(call.message, ta(admin_lang(lang), "unlinked"), None)
+    await swap_card(call.message, ta(admin_lang(lang), "unlinked"), None)
     await call.answer()
 
 

@@ -1,9 +1,11 @@
 """Automatic reminders (dashboard: Telegram bot › "Avtomatik eslatmalar"): 3 days and 1 day before an open survey
-ends, students who haven't rated all their teachers get a friendly, personal message with the survey button.
+ends, users who haven't finished (rated all their group's teachers, or - without a group - anyone) get a friendly,
+personal message with the survey button.
 Each reminder goes once per survey; it is listed with the other messages to students on the Bot page."""
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
+from html import escape
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramRetryAfter
@@ -12,13 +14,12 @@ from sqlalchemy import select
 from app import settings_store
 from app.bot import chatlog
 from app.bot import keyboards as kb
-from app.bot.handlers.menu import first_name
 from app.bot.i18n import t
 from app.db import session_scope
-from app.models import Broadcast, Student
+from app.models import Broadcast, BotUser
 from app.runtime import webapp_url
 from app.services import broadcast
-from app.services.students import active_campaign
+from app.services.survey import active_campaign
 
 log = logging.getLogger("reminders")
 CHECK_EVERY = 600  # seconds
@@ -47,8 +48,8 @@ async def due(now: datetime | None = None) -> tuple | None:
 async def send(bot: Bot, campaign, mark: str) -> int:
     async with session_scope() as session:
         people = await broadcast.recipients(session, "unfinished")
-        names = dict((await session.execute(select(Student.telegram_id, Student.full_name).where(
-            Student.telegram_id.in_([tid for tid, _ in people])))).all())
+        names = dict((await session.execute(select(BotUser.id, BotUser.first_name).where(
+            BotUser.id.in_([tid for tid, _ in people])))).all())
         values = await settings_store.load(session, fresh=True)
         sent_marks = dict(values["reminders_sent"])
         sent_marks[str(campaign.id)] = [*sent_marks.get(str(campaign.id), []), mark]
@@ -64,7 +65,7 @@ async def send(bot: Bot, campaign, mark: str) -> int:
         markup = kb.open_survey(lang, f"{url}/survey") if url else None
         for _attempt in range(3):
             try:
-                await bot.send_message(chat_id, t(lang, f"reminder_{mark}", name=first_name(names.get(chat_id, ""))),
+                await bot.send_message(chat_id, t(lang, f"reminder_{mark}", name=escape(names.get(chat_id) or "")),
                                        reply_markup=markup)
                 delivered += 1
                 break

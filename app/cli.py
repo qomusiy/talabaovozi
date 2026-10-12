@@ -3,7 +3,7 @@
 Everything here can also be done in the dashboard (Data, Surveys, Admins pages).
 
     python -m app.cli semester-create "2026–2027 kuzgi semestr" 2026-09-07 2027-01-24
-    python -m app.cli import-students    talaba_excel.xlsx [--deactivate-missing]
+    python -m app.cli import-group-sizes hemis_export.xlsx [--clear-missing]   # students per group (no names kept)
     python -m app.cli import-teachers    teachers.xlsx
     python -m app.cli import-assignments assignments.xlsx [--semester "..."]
     python -m app.cli campaign-create "Oraliq so‘rovnoma" --days 14
@@ -13,7 +13,7 @@ Everything here can also be done in the dashboard (Data, Surveys, Admins pages).
     python -m app.cli demo                     # demo feedback over the real data (--clear removes it)
     python -m app.cli reset-data --yes         # delete everything except admins, settings and timetables
     python -m app.cli stats
-    python -m app.cli student 368223100001     # who teaches this student?
+    python -m app.cli group "25-16 IQT"        # who teaches this group?
 """
 import argparse
 import asyncio
@@ -27,8 +27,8 @@ from sqlalchemy.orm import selectinload
 from app import demo
 from app.db import engine, session_scope
 from app.security import hash_password
-from app.importers.excel import ImportFileError, import_assignments, import_students, import_teachers
-from app.models import (Admin, Base, Feedback, Group, Semester, Student, Subject, SurveyCampaign, Teacher,
+from app.importers.excel import ImportFileError, import_assignments, import_group_sizes, import_teachers
+from app.models import (Admin, Base, BotUser, Feedback, Group, Semester, Subject, SurveyCampaign, Teacher,
                         TeachingAssignment)
 from app.services.teaching import guess_departments, health, rebuild_assignments, refresh_from_edupage
 
@@ -83,8 +83,8 @@ async def main(args) -> None:
                     s.add(SurveyCampaign(semester=semester, title=args.title, opens_at=now,
                                          closes_at=now + timedelta(days=args.days)))
                     print(f"✅ Survey '{args.title}' is open for {args.days} days")
-                case "import-students":
-                    print_report(await import_students(s, args.file, args.file.name, args.deactivate_missing, "cli"))
+                case "import-group-sizes":
+                    print_report(await import_group_sizes(s, args.file, args.file.name, args.clear_missing, "cli"))
                 case "import-teachers":
                     print_report(await import_teachers(s, args.file, args.file.name, "cli"))
                 case "import-assignments":
@@ -111,28 +111,26 @@ async def main(args) -> None:
                         print(f"✅ {r['rounds']} demo survey rounds, {r['feedback']:,} evaluations by {r['students']} students")
                 case "reset-data":
                     if not args.yes:
-                        raise SystemExit("Deletes all students, teachers, groups, assignments, surveys and feedback "
+                        raise SystemExit("Deletes all bot users, teachers, groups, assignments, surveys and feedback "
                                          "(keeps admins, settings and timetables). Run again with --yes.")
                     tables = [t.name for t in Base.metadata.sorted_tables if t.name not in KEEP_ON_RESET]
                     await s.execute(text(f"TRUNCATE {', '.join(tables)} RESTART IDENTITY CASCADE"))
                     print("✅ Data deleted")
                 case "stats":
-                    for model in (Student, Group, Teacher, Subject, TeachingAssignment, SurveyCampaign, Feedback):
+                    for model in (BotUser, Group, Teacher, Subject, TeachingAssignment, SurveyCampaign, Feedback):
                         n = (await s.execute(select(func.count()).select_from(model))).scalar()
                         print(f"  {model.__tablename__:22} {n}")
-                    registered = (await s.execute(
-                        select(func.count()).where(Student.telegram_id.is_not(None)))).scalar()
-                    print(f"  {'registered in bot':22} {registered}")
-                case "student":
-                    st = (await s.execute(select(Student).options(selectinload(Student.group))
-                                          .where(Student.hemis_id == args.hemis))).scalar_one_or_none()
-                    if st is None:
-                        raise SystemExit("❌ Student not found")
-                    print(f"{st.full_name} — {st.group.name if st.group else 'no group'}")
+                    students = await s.scalar(select(func.coalesce(func.sum(Group.student_count), 0)))
+                    print(f"  {'students (group sizes)':22} {students}")
+                case "group":
+                    group = await s.scalar(select(Group).where(Group.name == args.name))
+                    if group is None:
+                        raise SystemExit("❌ Group not found")
+                    print(f"{group.name} — {group.student_count or '?'} students")
                     rows = (await s.execute(
                         select(TeachingAssignment)
                         .options(selectinload(TeachingAssignment.teacher), selectinload(TeachingAssignment.subject))
-                        .join(Semester).where(Semester.is_current, TeachingAssignment.group_id == st.group_id)
+                        .join(Semester).where(Semester.is_current, TeachingAssignment.group_id == group.id)
                     )).scalars()
                     for a in rows:
                         print(f"  👨‍🏫 {a.teacher.full_name:40} {a.subject.name} ({a.lesson_type})")
@@ -147,10 +145,10 @@ if __name__ == "__main__":
     sub = p.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("semester-create")
     c.add_argument("name"); c.add_argument("starts", help="YYYY-MM-DD"); c.add_argument("ends", help="YYYY-MM-DD")
-    c = sub.add_parser("import-students")
+    c = sub.add_parser("import-group-sizes", help="how many students each group has (HEMIS export or a count column)")
     c.add_argument("file", type=Path)
-    c.add_argument("--deactivate-missing", action="store_true",
-                   help="mark students that are not in the file as inactive")
+    c.add_argument("--clear-missing", action="store_true",
+                   help="clear the number of groups that are not in the file")
     c = sub.add_parser("import-teachers"); c.add_argument("file", type=Path)
     c = sub.add_parser("import-assignments"); c.add_argument("file", type=Path)
     c.add_argument("--semester", help="semester name (default: current)")
@@ -165,5 +163,5 @@ if __name__ == "__main__":
     c = sub.add_parser("demo", help="demo feedback over the real data"); c.add_argument("--clear", action="store_true")
     c = sub.add_parser("reset-data"); c.add_argument("--yes", action="store_true")
     sub.add_parser("stats")
-    c = sub.add_parser("student"); c.add_argument("hemis")
+    c = sub.add_parser("group"); c.add_argument("name")
     asyncio.run(main(p.parse_args()))

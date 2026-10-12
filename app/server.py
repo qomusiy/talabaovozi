@@ -1,18 +1,21 @@
-"""The whole server as one program - used on Windows, where a task started with Windows runs it
-(scripts\\setup.bat sets that up; scripts\\server.bat manages it):
+"""The whole server as one program, on Linux and Windows:
 
-    python -m app.server
+    python -m app.server            # web server, Telegram bot and public address (Ctrl+C stops all three)
+    python -m app.server --no-bot   # without the bot - e.g. to try the dashboard while the real server runs the bot
+    python -m app.server status     # is it running? + the public address
 
-It runs the web server, the Telegram bot and the public tunnel, and starts each again if it stops; watches the
-public address like scripts/tunnel.sh (a quick tunnel that stops answering gets a new address, the fixed ones
-reconnect); and makes a database backup every night (app.backup). Logs: data/runtime/logs/.
-On Linux systemd does the same job with scripts/server.sh, tunnel.sh and backup.sh.
+It starts each program again if it stops; watches the public address (a quick tunnel that stops answering gets a new
+address, the fixed ones reconnect); and makes a database backup every night (app.backup). Logs: data/runtime/logs/.
+It starts with the computer as a systemd service on Linux (scripts/setup.sh; scripts/server.sh manages it) and as a
+task on Windows (scripts\\setup.bat; scripts\\server.bat manages it).
 """
+import argparse
 import asyncio
 import json
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -24,10 +27,12 @@ import httpx
 
 from app import backup
 from app.config import get_settings
-from app.runtime import ROOT, TUNNEL_RESTART_FILE, TUNNEL_STATUS_FILE, WEBAPP_URL_FILE
+from app.runtime import (ROOT, SERVER_SCRIPT, SERVER_STATUS_FILE, SETUP_SCRIPT, TUNNEL_RESTART_FILE,
+                         TUNNEL_STATUS_FILE, WEBAPP_URL_FILE, tunnel_status)
 
 LOGS = ROOT / "data" / "runtime" / "logs"
-STATUS_FILE = ROOT / "data" / "runtime" / "server_status.json"   # read by scripts\server.bat status
+STATUS_FILE = SERVER_STATUS_FILE   # written every 10 s: `status`, and the bot's server messages to admins
+STARTED = int(time.time())
 LOCK_PORT = 47801        # held while the server runs, so a second copy refuses to start
 CHECK_EVERY = 60         # seconds between checks of the public address
 MAX_FAILS = 4            # failed checks in a row before the tunnel is started again
@@ -109,6 +114,12 @@ class Child:
         return self.proc is not None and self.proc.returncode is None
 
     async def keep_running(self) -> None:
+        try:
+            await self._loop()
+        finally:  # the server stops: the program stops with it
+            self.stop()
+
+    async def _loop(self) -> None:
         delay = 5
         while True:
             log = open_log(self.name)
@@ -118,8 +129,9 @@ class Child:
                     stderr=asyncio.subprocess.STDOUT, limit=1 << 20)
             except OSError as e:
                 log.close()
-                say(f"❌ {self.name}: cannot start ({e}) - trying again in 30 s")
-                await asyncio.sleep(30)
+                hint = f" - is it installed? {SETUP_SCRIPT} installs it" if isinstance(e, FileNotFoundError) else ""
+                say(f"❌ {self.name}: cannot start {self.command[0]} ({e}) - trying again in 60 s{hint}")
+                await asyncio.sleep(60)
                 continue
             self.since, self.restarts = time.time(), self.restarts + 1
             say(f"▶️  {self.name} started (pid {self.proc.pid})")
@@ -131,7 +143,10 @@ class Child:
                     log.write(f"{datetime.now():%H:%M:%S} {line}\n")
                     log.flush()
                     if self.on_line:
-                        self.on_line(line)
+                        try:
+                            self.on_line(line)
+                        except Exception as e:  # never stop reading the program's output
+                            say(f"❌ {self.name}: {e!r}")
             code = await self.proc.wait()
             delay = 5 if time.time() - self.since > 120 else min(delay * 2, 60)
             say(f"⏹  {self.name} stopped (exit code {code}) - starting again in {delay} s")
@@ -143,15 +158,32 @@ class Child:
             self.proc.kill()
 
 
+def write_file(path: Path, text: str) -> bool:
+    """Replace the file at once, so the bot and the web server never read half of it."""
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(text)
+    for _ in range(50):  # Windows refuses to replace a file while the bot or the web server is reading it
+        try:
+            os.replace(tmp, path)
+            return True
+        except PermissionError:
+            time.sleep(0.1)
+    say(f"❌ Could not write {path}")
+    return False
+
+
 def write_url(url: str) -> None:
-    tmp = WEBAPP_URL_FILE.with_suffix(".tmp")
-    tmp.write_text(url)
-    os.replace(tmp, WEBAPP_URL_FILE)
-    say(f"🌐 Public address: {url}  (survey: {url}/survey)")
+    if write_file(WEBAPP_URL_FILE, url):
+        say(f"🌐 Public address: {url}  (survey: {url}/survey)")
 
 
 class Tunnel:
-    """The public HTTPS address (TUNNEL in .env): quick, cloudflare or tailscale - see scripts/tunnel.sh."""
+    """The public HTTPS address of the survey (TUNNEL in .env, README › Fixed address):
+
+    quick       a free Cloudflare quick tunnel, https://….trycloudflare.com - a NEW address after every restart
+    tailscale   Tailscale Funnel, https://talaba-ovozi.<tailnet>.ts.net - the same address forever
+    cloudflare  a Cloudflare named tunnel on your own domain (CLOUDFLARE_TUNNEL_TOKEN, WEBAPP_URL) - the same forever
+    """
 
     def __init__(self, mode: str):
         self.mode = mode or "quick"
@@ -206,7 +238,7 @@ class Tunnel:
             self.url = "https://" + info["Self"]["DNSName"].rstrip(".")
             write_url(self.url)
         except (OSError, subprocess.SubprocessError, ValueError, KeyError) as e:
-            say(f"❌ Tailscale: {e} - is it installed and logged in? (scripts\\setup.bat)")
+            say(f"❌ Tailscale: {e} - is it installed and logged in? ({SETUP_SCRIPT})")
             self.status("down", MAX_FAILS)
 
     def restart(self) -> None:
@@ -228,8 +260,9 @@ class Tunnel:
                 self.restart()
                 continue
             if not self.url:
-                if self.mode == "quick" and now - self.since > 90:
+                if self.mode == "quick" and now - self.since > 90 and self.child.running:
                     say("❌ No public address after 90 s (no internet, or Cloudflare refused) - trying again")
+                    self.since = now
                     self.restart()
                 elif self.mode == "tailscale" and now - self.since > 60:
                     await asyncio.to_thread(self.tailscale_up)
@@ -276,8 +309,9 @@ async def backups() -> None:
 
 async def write_status(children: list[Child], tunnel: Tunnel) -> None:
     while True:
-        STATUS_FILE.write_text(json.dumps({
-            "at": int(time.time()), "pid": os.getpid(), "tunnel_mode": tunnel.mode, "url": tunnel.url,
+        write_file(STATUS_FILE, json.dumps({
+            "at": int(time.time()), "started": STARTED, "pid": os.getpid(), "tunnel_mode": tunnel.mode,
+            "url": tunnel.url,
             "children": {c.name: {"running": c.running, "since": int(c.since), "restarts": max(c.restarts, 0)}
                          for c in children},
         }))
@@ -294,8 +328,21 @@ async def forever(name: str, loop) -> None:
             await asyncio.sleep(30)
 
 
+def update_pending() -> bool:
+    """Does the database need an update (new code)? False for an empty database, or when it can't tell."""
+    result = subprocess.run([sys.executable, "-m", "alembic", "current"], cwd=ROOT, env=child_env(),
+                            capture_output=True, text=True)
+    return result.returncode == 0 and bool(result.stdout.strip()) and "(head)" not in result.stdout
+
+
 async def migrate() -> None:
-    """Bring the database up to date - retried while PostgreSQL is still starting (right after boot)."""
+    """Bring the database up to date - retried while PostgreSQL is still starting (right after boot). An update
+    may change or delete data, so a backup is made before it."""
+    if await asyncio.to_thread(update_pending):
+        try:
+            say(f"💾 Backup before updating the database: {(await asyncio.to_thread(backup.make)).name}")
+        except (Exception, SystemExit) as e:
+            say(f"⚠️  No backup before the update ({e}) - last night's copy is in data/backups")
     while True:
         result = await asyncio.to_thread(subprocess.run, [sys.executable, "-m", "alembic", "upgrade", "head"],
                                          cwd=ROOT, env=child_env(), capture_output=True, text=True)
@@ -316,18 +363,21 @@ async def web_ready(port: int) -> None:
             await asyncio.sleep(1)
 
 
-async def main() -> None:
+async def main(with_bot: bool) -> None:
     settings = get_settings()
-    say(f"🚀 Talaba Ovozi server starting (pid {os.getpid()}, TUNNEL={settings.tunnel or 'quick'})")
+    if os.name != "nt":  # systemd (or kill) stops it the way Ctrl+C does: the programs stop with it
+        asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, asyncio.current_task().cancel)
+    say(f"🚀 Talaba Ovozi server starting (pid {os.getpid()}, TUNNEL={settings.tunnel or 'quick'}"
+        + ("" if with_bot else ", without the bot") + ")")
     await migrate()
     python = sys.executable
     web = Child("web", [python, "-m", "app.web"])
-    bot = Child("bot", [python, "-m", "app.bot"])
     tunnel = Tunnel(settings.tunnel)
     tasks = [asyncio.create_task(forever("web", web.keep_running))]
     await web_ready(settings.web_port)
     say(f"📊 Dashboard: http://127.0.0.1:{settings.web_port}/admin")
-    children = [web, bot] + ([tunnel.child] if tunnel.child else [])
+    children = ([web] + ([Child("bot", [python, "-m", "app.bot"])] if with_bot else [])
+                + ([tunnel.child] if tunnel.child else []))
     tasks += [asyncio.create_task(forever(c.name, c.keep_running)) for c in children[1:]]
     tasks += [asyncio.create_task(forever("tunnel watch", tunnel.watch)),
               asyncio.create_task(forever("backups", backups)),
@@ -335,21 +385,55 @@ async def main() -> None:
     await asyncio.gather(*tasks)
 
 
+def show_status() -> None:
+    """Is the server running (it writes STATUS_FILE every 10 s)? + the public address and the newest backup."""
+    try:
+        status = json.loads(STATUS_FILE.read_text())
+    except (OSError, ValueError):
+        status = None
+    now = time.time()
+    if status and now - status["at"] < 30:
+        for name, c in status["children"].items():
+            if c["running"]:
+                print(f"  ✅ {name:8} running for {int((now - c['since']) / 60)} min (restarts: {c['restarts']})")
+            else:
+                print(f"  ❌ {name:8} NOT running - see: {SERVER_SCRIPT} logs {name}")
+        if status["url"]:
+            print(f"  🌐 address  {status['url']}   (last check: {tunnel_status()['state']})")
+            print(f"  📝 survey   {status['url']}/survey   (students open it from the bot)")
+        else:
+            print("  ⏳ address  none yet (the tunnel is starting)")
+    else:
+        print(f"  ❌ server   NOT running - {SERVER_SCRIPT} start")
+    print(f"  📊 admin    http://127.0.0.1:{get_settings().web_port}/admin   (on this computer)")
+    last = backup.newest()
+    print(f"  💾 backup   {last.name if last else 'none yet'}")
+
+
 def run() -> None:
-    LOGS.mkdir(parents=True, exist_ok=True)
+    parser = argparse.ArgumentParser(prog="python -m app.server", description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("command", nargs="?", choices=("run", "status"), default="run")
+    parser.add_argument("--no-bot", action="store_true", help="without the Telegram bot")
+    args = parser.parse_args()
     for stream in (sys.stdout, sys.stderr):  # a Windows console can't print emoji in its old code page
         if stream and hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
+    if args.command == "status":
+        return show_status()
+    LOGS.mkdir(parents=True, exist_ok=True)
     lock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         lock.bind(("127.0.0.1", LOCK_PORT))
     except OSError:
-        raise SystemExit("❌ The server is already running (scripts\\server.bat status). Stop it first.")
+        raise SystemExit(f"❌ The server is already running ({SERVER_SCRIPT} status). Stop it first.")
     die_with_me()
     try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        say("⏹  Stopped (Ctrl+C)")
+        asyncio.run(main(with_bot=not args.no_bot))
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        say("⏹  Stopped")
+    finally:
+        STATUS_FILE.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

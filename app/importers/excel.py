@@ -1,4 +1,4 @@
-"""Import students / teachers / teaching assignments / a timetable from Excel (uploaded in the dashboard).
+"""Import group sizes / teachers / teaching assignments / a timetable from Excel (uploaded in the dashboard).
 
 Column headers are matched flexibly, so real exports (HEMIS etc.) can be used as they are, as long as their
 headers resemble one of the aliases below. If a real file uses a header that isn't recognised, the error lists
@@ -17,11 +17,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.faculty import display_code, group_key
 from app.importers.templates import INFO_SHEETS
-from app.models import Department, Group, ImportLog, Semester, Student, Subject, Teacher, TeachingAssignment
-from app.security import (hash_passport, is_valid_passport, normalize_hemis, normalize_passport,
-                          temporary_passport)
+from app.models import Department, Group, ImportLog, Semester, Subject, Teacher, TeachingAssignment
 from app.services.teaching import name_key, teacher_name_keys
 from app.timetable.edupage import split_subject
+
+
+def _clean_id(raw) -> str:
+    """Excel often turns long ids into floats ('368211100123.0') - strip that."""
+    s = str(raw).strip()
+    return re.sub(r"\s", "", s[:-2] if s.endswith(".0") else s)
 
 
 def _norm(h) -> str:
@@ -30,11 +34,13 @@ def _norm(h) -> str:
 
 
 # field -> aliases (compared after _norm). Exact matches win; then "header contains alias" for aliases >= 4 chars.
-STUDENT_COLUMNS = {
-    "hemis_id": ["hemisid", "hemis", "talabaid", "studentid", "idraqami", "talabaraqami", "id"],
-    "full_name": ["fish", "fio", "fullname", "familiyaismisharifi", "ism", "talabafish"],
-    "passport": ["pasport", "passport", "pasportseriyavaraqami", "паспорт", "jshshir"],
+# Group sizes: a HEMIS export (one row per student - counted per group; only HEMIS ids are read, to skip repeats)
+# or one row per group with its number of students.
+GROUP_SIZE_COLUMNS = {
     "group": ["guruh", "group", "группа", "guruhnomi"],
+    "number": ["raqami", "guruhraqami", "number", "groupnumber", "номер", "номергруппы"],
+    "count": ["talabalarsoni", "talabasoni", "soni", "studentcount", "students", "количество", "числостудентов"],
+    "hemis_id": ["hemisid", "hemis", "talabaid", "studentid", "idraqami", "talabaraqami"],
     "course": ["kurs", "course", "курс", "bosqich", "year"],
     "specialty": ["mutaxassislik", "yonalish", "specialty", "специальность", "направление"],
     "language": ["talimtili", "til", "language", "языкобучения"],
@@ -86,10 +92,9 @@ DAY_NAMES = ["Dushanba", "Seshanba", "Chorshanba", "Payshanba", "Juma", "Shanba"
 
 # Problems are codes + values; the dashboard shows them in its language (imp_* / impf_* texts), the CLI in English.
 ROW_MESSAGES = {
-    "bad_hemis": "invalid HEMIS id '{value}'",
-    "dup_hemis": "HEMIS id {value} appears twice in the file",
-    "new_needs": "new student {value} needs a name and a group",
-    "bad_passport": "invalid passport code '{value}' (expected like AD1231212)",
+    "no_group": "no group",
+    "bad_count": "the number of students '{value}' is not a number",
+    "number_taken": "the number '{value}' is already another group's",
     "no_name": "empty name",
     "no_teacher": "no teacher",
     "bad_slot": "day '{day}' / period '{period}' not understood",
@@ -102,8 +107,7 @@ FILE_MESSAGES = {
     "missing": "Missing column(s): {missing}. Columns in the file: {found}",
 }
 # Column names as in the templates, used in "missing column" messages.
-FIELD_LABELS = {"hemis_id": "HEMIS ID", "full_name": "F.I.Sh.", "passport": "Pasport", "group": "Guruh",
-                "subject": "Fan", "day": "Kun", "period": "Juftlik"}
+FIELD_LABELS = {"full_name": "F.I.Sh.", "group": "Guruh", "subject": "Fan", "day": "Kun", "period": "Juftlik"}
 
 
 class ImportFileError(Exception):
@@ -120,8 +124,7 @@ class ImportReport:
     created: int = 0
     updated: int = 0
     skipped: int = 0
-    temporary: int = 0     # students given a temporary passport code
-    deactivated: int = 0   # students not in the file (with deactivate_missing)
+    deactivated: int = 0   # group sizes: groups not in the file whose number was cleared
     errors: list[tuple[int, str, dict]] = field(default_factory=list)  # (row, code, values)
 
     def error(self, row: int, code: str, **values) -> None:
@@ -134,8 +137,6 @@ class ImportReport:
         parts = [f"{self.created} created", f"{self.updated} updated"]
         if self.skipped:
             parts.append(f"{self.skipped} duplicates skipped")
-        if self.temporary:
-            parts.append(f"{self.temporary} with a temporary passport code")
         if self.deactivated:
             parts.append(f"{self.deactivated} deactivated")
         parts.append(f"{len(self.errors)} errors")
@@ -289,65 +290,62 @@ class _Groups:
         return group
 
 
-async def import_students(session: AsyncSession, source, filename: str = "", deactivate_missing: bool = False,
-                          admin: str | None = None) -> ImportReport:
-    """Upsert students by HEMIS id. Existing Telegram links are kept.
+async def import_group_sizes(session: AsyncSession, source, filename: str = "", clear_missing: bool = False,
+                             admin: str | None = None) -> ImportReport:
+    """How many students each group has - nothing about the students themselves is kept.
 
-    Only the HEMIS column is required: a file with just HEMIS + passport updates the passport codes.
-    New students need a name and a group. Students without a passport code get a temporary one
-    (app.security.temporary_passport) until a file with the real codes is uploaded.
-    deactivate_missing=True marks students not in the file as inactive (graduated, expelled...).
+    A row with a number ("Talabalar soni") sets that group's number; a row without one counts as one student (a
+    HEMIS export: one row per student, a repeated HEMIS id counted once). Missing groups are added.
+    "Raqami" sets the number students know the group by (302); a row with only that changes nothing else.
+    clear_missing=True clears the number of groups that are not in the file (a new semester's export).
     """
     report = ImportReport("students")
-    rows = _read_rows(source, STUDENT_COLUMNS, ["hemis_id"])
-    existing = {s.hemis_id: s for s in (await session.execute(select(Student))).scalars()}
+    rows = _read_rows(source, GROUP_SIZE_COLUMNS, ["group"])
     groups = _Groups(session)
-    seen: set[str] = set()
-
+    sizes: dict[int, int] = {}
+    found: dict[int, Group] = {}
+    seen_hemis: set[str] = set()
+    numbers = dict((await session.execute(select(Group.number, Group.id).where(Group.number.is_not(None)))).all())
     for row_no, r in rows:
-        hemis = normalize_hemis(r["hemis_id"] or "")
-        if not re.fullmatch(r"\d{5,20}", hemis):
-            report.error(row_no, "bad_hemis", value=r["hemis_id"])
+        if not r.get("group"):
+            report.error(row_no, "no_group")
             continue
-        if hemis in seen:
-            report.error(row_no, "dup_hemis", value=hemis)
+        number = " ".join(str(r.get("number") or "").removesuffix(".0").split())[:16]
+        count = None
+        if r.get("count"):
+            raw = str(r["count"]).strip().removesuffix(".0")
+            if not raw.isdigit():
+                report.error(row_no, "bad_count", value=r["count"])
+                continue
+            count = int(raw)
+        elif hemis := _clean_id(r.get("hemis_id") or ""):
+            if hemis in seen_hemis:
+                report.skipped += 1
+                continue
+            seen_hemis.add(hemis)
+        group = await groups.get(r["group"], course=_course(r.get("course"), r["group"]),
+                                 specialty=r.get("specialty"), language=LANGUAGE_MAP.get(_norm(r.get("language") or "")))
+        await session.flush()
+        found[group.id] = group
+        only_number = number and count is None and not r.get("hemis_id")  # the group's size stays as it is
+        if number and numbers.get(number, group.id) != group.id:
+            report.error(row_no, "number_taken", value=number)
+        elif number and group.number != number:
+            numbers.pop(group.number, None)
+            group.number, numbers[number] = number, group.id
+            report.updated += only_number
+        if only_number:
             continue
-        student = existing.get(hemis)
-        if student is None and not (r.get("full_name") and r.get("group")):
-            report.error(row_no, "new_needs", value=hemis)
-            continue
-        passport = normalize_passport(r["passport"]) if r.get("passport") else None
-        if passport and not is_valid_passport(passport):
-            report.error(row_no, "bad_passport", value=r["passport"])
-            continue
-        seen.add(hemis)
-
-        if student is None:
-            student = Student(hemis_id=hemis)
-            session.add(student)
-            existing[hemis] = student
-            report.created += 1
-        else:
-            report.updated += 1
-        if passport:
-            student.passport_hash, student.passport_temporary = hash_passport(passport), False
-        elif not student.passport_hash or student.passport_temporary:
-            student.passport_hash, student.passport_temporary = hash_passport(temporary_passport(hemis)), True
-            report.temporary += 1
-        if r.get("full_name"):
-            student.full_name = tidy_name(r["full_name"])
-        if r.get("group"):
-            student.group = await groups.get(r["group"], course=_course(r.get("course"), r["group"]),
-                                             specialty=r.get("specialty"),
-                                             language=LANGUAGE_MAP.get(_norm(r.get("language") or "")))
-        student.is_active = True
-
-    if deactivate_missing and not report.errors:
-        for hemis, student in existing.items():
-            if hemis not in seen and student.is_active:
-                student.is_active = False
+        sizes[group.id] = count if count is not None else sizes.get(group.id, 0) + 1
+    for gid, n in sizes.items():
+        if found[gid].student_count != n:
+            found[gid].student_count = n
+        report.updated += 1
+    if clear_missing and not report.errors:
+        for g in (await session.execute(select(Group).where(Group.student_count.is_not(None)))).scalars():
+            if g.id not in sizes:
+                g.student_count = None
                 report.deactivated += 1
-
     session.add(report.log(filename, admin))
     await session.flush()
     return report
@@ -391,7 +389,7 @@ async def import_teachers(session: AsyncSession, source, filename: str = "", adm
         if not name:
             report.error(row_no, "no_name")
             continue
-        ext = normalize_hemis(r["external_id"]) if r.get("external_id") else None
+        ext = _clean_id(r["external_id"]) if r.get("external_id") else None
         teacher = teachers.find(ext, name, r.get("short_name"))
         if teacher is None:
             teacher = Teacher(full_name=name, short_name=r.get("short_name"))
@@ -434,7 +432,7 @@ async def import_assignments(session: AsyncSession, source, semester: Semester, 
     new_rows: list[TeachingAssignment] = []
 
     for row_no, r in rows:
-        ext = normalize_hemis(r["teacher_id"]) if r.get("teacher_id") else None
+        ext = _clean_id(r["teacher_id"]) if r.get("teacher_id") else None
         teacher = teachers.find(ext, r.get("teacher_name"))
         if teacher is None:
             if not r.get("teacher_name"):

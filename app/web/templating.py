@@ -9,7 +9,7 @@ from markupsafe import Markup
 
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 # Templates are read once per process: editing them on disk doesn't change a running server, so a template can never
-# be newer than the code that renders it (restart to see changes - scripts/dev.sh reloads by itself).
+# be newer than the code that renders it (restart the server to see changes).
 templates.env.auto_reload = False
 log = logging.getLogger("web")
 

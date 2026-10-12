@@ -8,7 +8,7 @@
   <link rel="preload" href="/static/vendor/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="/static/vendor/geist-mono-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/static/fonts-admin.css?v=1">
-  <link rel="stylesheet" href="/static/admin.css?v=16">
+  <link rel="stylesheet" href="/static/admin.css?v=18">
 </head>
 <body data-page="{% block page %}{% endblock %}">
 <div class="progress" id="progress" aria-hidden="true"></div>
@@ -24,10 +24,9 @@
     <a class="brand" href="{{ url('/admin') }}" data-nav><div><b>Talaba Ovozi</b><span>{{ t('brand_sub') }}</span></div></a>
     <div class="nav-label" style="--dash: var(--s1)">{{ t('nav_section') }}</div>
     <nav class="nav">
-      {# Students are reached through their group (Groups › 25-16 IQT talabalari), so Groups stays lit there. #}
       {% for href, key, ic in [('/admin', 'nav_overview', 'overview'), ('/admin/teachers', 'nav_teachers', 'teachers'),
                                 ('/admin/groups', 'nav_groups', 'groups'), ('/admin/comments', 'nav_comments', 'message')] %}
-      <a href="{{ url(href) }}" class="{{ 'on' if (path == href if href == '/admin' else path.startswith(href) or (href == '/admin/groups' and path.startswith('/admin/students'))) }}" data-nav>{{ icon(ic) }}{{ t(key) }}</a>
+      <a href="{{ url(href) }}" class="{{ 'on' if (path == href if href == '/admin' else path.startswith(href)) }}" data-nav>{{ icon(ic) }}{{ t(key) }}</a>
       {% endfor %}
     </nav>
     <div class="nav-label" style="--dash: var(--s2)">{{ t('nav_section_ref') }}</div>
@@ -47,6 +46,7 @@
     {% if is_programmer %}
     <div class="nav-label" style="--dash: var(--s4)">{{ t('nav_section_dev') }}</div>
     <nav class="nav">
+      <a href="/admin/users" class="{{ 'on' if path.startswith('/admin/users') }}" data-nav>{{ icon('user') }}{{ t('nav_users') }}</a>
       <a href="/admin/audit" class="{{ 'on' if path.startswith('/admin/audit') }}" data-nav>{{ icon('activity') }}{{ t('nav_audit') }}</a>
       <a href="/admin/chats" class="{{ 'on' if path.startswith('/admin/chats') }}" data-nav>{{ icon('chats') }}{{ t('nav_chats') }}</a>
       <a href="/admin/records?tab=feedback" class="{{ 'on' if path.startswith('/admin/records') and request.query_params.get('tab') == 'feedback' }}" data-nav>{{ icon('star') }}{{ t('rd_tab_feedback') }}</a>
@@ -55,7 +55,7 @@
     {% endif %}
     <div class="user">
       <a class="who" href="{{ url('/admin/account') }}" data-nav data-tip="{{ t('tip_account') }}">
-        <span class="txt"><b>{{ admin.username }}</b><span>{{ t('role_' ~ admin.role) }}{% if not show_who %} · <span class="priv" data-tip="{{ t('hide_names_on') }}">{{ icon('eye_off') }}{{ t('hide_names_short') }}</span>{% endif %}</span></span></a>
+        <span class="txt"><b>{{ admin.username }}</b><span>{{ t('role_' ~ admin.role) }}{% if is_programmer and not show_who %} · <span class="priv" data-tip="{{ t('hide_names_on') }}">{{ icon('eye_off') }}{{ t('hide_names_short') }}</span>{% endif %}</span></span></a>
       <button class="view" type="button" data-open-display data-tip="{{ t('dp_title') }}" aria-label="{{ t('dp_title') }}">{{ icon('text_size') }}</button>
       <a class="out" href="/admin/logout" data-tip="{{ t('tip_logout') }}" aria-label="{{ t('logout') }}">{{ icon('logout') }}</a>
     </div>
@@ -128,11 +128,16 @@
           <span><b>{{ t('dp_' ~ key) }}</b><span class="hint">{{ t('dp_' ~ key ~ '_hint') }}</span></span></label>
         {% endfor %}
       </div>
-      <fieldset class="privacy"><legend class="lbl">{{ t('dp_privacy') }}</legend>
-        {% set forced = admin.role == 'viewer' and not admin.show_identity %}
-        <label class="switch-row"><span class="switch"><input type="checkbox" name="hide_names" value="true" {{ 'checked' if display.hide_names or forced }} {{ 'disabled' if forced }} data-reload></span>
-          <span><b>{{ icon('eye_off') }}{{ t('dp_hide_names') }}</b><span class="hint">{{ t('dp_hide_names_forced') if forced else t('dp_hide_names_hint') }}</span></span></label>
+      <fieldset class="dp-section"><legend class="lbl">{{ t('nav_groups') }}</legend>
+        <label class="switch-row"><span class="switch"><input type="checkbox" name="group_numbers" value="true" {{ 'checked' if display.group_numbers }} data-reload></span>
+          <span><b>{{ icon('groups') }}{{ t('dp_group_numbers') }}</b><span class="hint">{{ t('dp_group_numbers_hint') }}</span></span></label>
       </fieldset>
+      {% if is_programmer %}{# only programmer accounts see who rated, so only they can hide it #}
+      <fieldset class="dp-section"><legend class="lbl">{{ t('dp_privacy') }}</legend>
+        <label class="switch-row"><span class="switch"><input type="checkbox" name="hide_names" value="true" {{ 'checked' if display.hide_names }} data-reload></span>
+          <span><b>{{ icon('eye_off') }}{{ t('dp_hide_names') }}</b><span class="hint">{{ t('dp_hide_names_hint') }}</span></span></label>
+      </fieldset>
+      {% endif %}
       <p class="dp-sample">{{ t('dp_sample') }} <a class="link" href="#" onclick="return false">{{ t('dp_sample_link') }}</a></p>
     </div>
     <div class="modal-f">
@@ -146,6 +151,6 @@
 <script type="application/json" id="i18n">{{ js_texts | tojson }}</script>
 {% if data is defined %}<script type="application/json" id="page-data">{{ data | tojson }}</script>{% endif %}
 <script src="/static/vendor/echarts.min.js"></script>
-<script src="/static/admin.js?v=17"></script>
+<script src="/static/admin.js?v=19"></script>
 </body>
 </html>

@@ -3,7 +3,7 @@
 Every /admin request passes AuditMiddleware, which writes one `audit_log` row after the response:
 - kind: login / login_failed / logout / view (a page) / action (a form) / export (Excel) / denied (403) / error
 - the page title (set by the page itself, see views.render), the message the admin saw after an action,
-  the form fields (passwords and passport codes hidden), and every database change the request made -
+  the form fields (passwords hidden), and every database change the request made -
   collected from SQLAlchemy as the request flushes, so "Kafedra: Ingliz tili -> Oliy matematika" is there
   without each page having to report it.
 Only programmer accounts can read the log (Dasturchi › Jurnal).
@@ -28,7 +28,7 @@ from app.web.security import client_ip
 log = logging.getLogger("audit")
 KEEP_DAYS = 365
 SECRET_FIELDS = re.compile(r"password|passport|current|new|repeat|token|secret", re.I)
-SECRET_COLUMNS = {"password_hash", "passport_hash"}
+SECRET_COLUMNS = {"password_hash"}
 SKIP_MODELS = (AuditLog, TimetableSnapshot, ImportLog)   # big or self-describing
 QUIET_PATHS = ("/admin/bot/audience",)                    # background requests of a page, not something a person did
 

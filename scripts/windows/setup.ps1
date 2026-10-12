@@ -65,6 +65,7 @@ function Stop-Server {   # the task's programs end with it; the loop is the safe
         ($_.Name -eq "python.exe" -and $_.CommandLine -match "-m app\.(server|web|bot)") -or
         ($_.Name -eq "cloudflared.exe" -and $_.CommandLine -like "*$Root*") } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Remove-Item "$Root\data\runtime\server_status.json" -ErrorAction SilentlyContinue   # no stale "running"
 }
 
 # --- administrator rights (a new window opens) ---------------------------------------------------------------
@@ -78,6 +79,18 @@ if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     exit 0
 }
 Write-Host "Talaba Ovozi setup in $Root"
+try {   # a click inside the window would start "Select" mode, which pauses everything until Esc
+    Add-Type -Namespace Win32 -Name ConsoleMode -MemberDefinition @'
+[DllImport("kernel32.dll")] public static extern System.IntPtr GetStdHandle(int handle);
+[DllImport("kernel32.dll")] public static extern bool GetConsoleMode(System.IntPtr handle, out uint mode);
+[DllImport("kernel32.dll")] public static extern bool SetConsoleMode(System.IntPtr handle, uint mode);
+'@
+    $in = [Win32.ConsoleMode]::GetStdHandle(-10)
+    $mode = 0
+    if ([Win32.ConsoleMode]::GetConsoleMode($in, [ref]$mode)) {
+        [void][Win32.ConsoleMode]::SetConsoleMode($in, ($mode -band (-bnot 0x40)) -bor 0x80)   # QuickEdit off
+    }
+} catch { }
 if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
     Write-Host "Stopping the running server while it is updated..."
     Stop-Server
@@ -87,7 +100,7 @@ if (Get-ScheduledTask -TaskName "Talaba Ovozi server" -ErrorAction SilentlyConti
     Write-Host "Removing the earlier WSL setup..."
     Stop-ScheduledTask -TaskName "Talaba Ovozi server" -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName "Talaba Ovozi server" -Confirm:$false
-    & wsl.exe -d Ubuntu-24.04 --exec bash -lc "cd ~/talaba-ovozi 2>/dev/null && scripts/server.sh uninstall"
+    & wsl.exe -d Ubuntu-24.04 --exec bash -lc "systemctl --user disable --now talaba-web talaba-bot talaba-tunnel talaba-backup.timer 2>/dev/null; true"
     & wsl.exe --terminate Ubuntu-24.04 2>$null | Out-Null
 }
 
@@ -127,6 +140,16 @@ if (-not $Transfer) {
         -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
     if ($found.Count -gt 0) { $Transfer = $found[0].FullName }
 }
+while (-not $Transfer -and -not (Test-Path "$Root\.env")) {   # first run: the data from the old computer
+    Write-Host ""
+    Write-Host "The transfer file (talaba-transfer-....tar.gz) is not in $Root or in Downloads." -ForegroundColor Yellow
+    $answer = Read-Host "Copy it into $Root, then press Enter (or type NEW to start without any data)"
+    if ($answer -eq "NEW") { break }
+    $found = @(Get-ChildItem -Path $Root, "$env:USERPROFILE\Downloads" -Filter "talaba-transfer-*.tar.gz" `
+        -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
+    if ($found.Count -gt 0) { $Transfer = $found[0].FullName }
+}
+if ($Transfer) { Write-Host "Data from: $Transfer" }
 $Unpacked = $null
 if ($Transfer) {
     $Unpacked = Join-Path $env:TEMP ("talaba-" + [guid]::NewGuid())
@@ -183,24 +206,35 @@ Ok "PostgreSQL $PgVersion on port $DbPort, database $DbName (starts with Windows
 
 # --- 4. .env and data -----------------------------------------------------------------------------------------
 Say "4/7 Settings (.env) and your data"
-$empty = (Psql $DbUser $DbPass $DbName "select to_regclass('public.students') is null") -eq "t"
-if ($Unpacked -and $empty) {
-    # The database and its .env belong together: passports are checked with SECRET_KEY.
-    if ((Test-Path "$Root\.env") -and (Get-FileHash "$Root\.env").Hash -ne (Get-FileHash "$Unpacked\.env").Hash) {
-        Copy-Item "$Root\.env" ("$Root\.env.old-" + (Get-Date -Format "yyyy-MM-dd_HHmm"))
-        Write-Host "The .env that was here is kept as .env.old-..."
+$rows = Psql $DbUser $DbPass $DbName "select (select count(*) from public.admins) + (select count(*) from public.feedback)"
+$empty = ($LASTEXITCODE -ne 0) -or ($rows -eq "0")   # no tables yet, or no admin accounts and no ratings in them
+$replace = $false
+if ($Unpacked -and -not $empty) {   # set up before: this computer has data of its own
+    Write-Host "This computer's database already has data." -ForegroundColor Yellow
+    $answer = Read-Host "Replace it with the data from $(Split-Path $Transfer -Leaf)? (a copy of it is saved first) [y/N]"
+    $replace = $answer -match '^\s*(y|yes|ha)\s*$'
+}
+if ($Unpacked -and ($empty -or $replace)) {
+    if ($replace) {   # this computer keeps its own .env (its address settings); only the data comes
+        & $VenvPy -X utf8 -m app.backup now
+        if ($LASTEXITCODE -ne 0) { Fail "Could not save a copy of the current data first - nothing was replaced" }
+    } else {
+        if ((Test-Path "$Root\.env") -and (Get-FileHash "$Root\.env").Hash -ne (Get-FileHash "$Unpacked\.env").Hash) {
+            Copy-Item "$Root\.env" ("$Root\.env.old-" + (Get-Date -Format "yyyy-MM-dd_HHmm"))
+            Write-Host "The .env that was here is kept as .env.old-..."
+        }
+        Copy-Item "$Unpacked\.env" "$Root\.env" -Force
     }
-    Copy-Item "$Unpacked\.env" "$Root\.env" -Force
     $dump = Get-ChildItem "$Unpacked\data\backups" -Filter "feedback-*.sql.gz" | Select-Object -First 1
     if (-not $dump) { Fail "There is no database copy in $Transfer" }
     New-Item -ItemType Directory -Force "$Root\data\backups" | Out-Null
     Copy-Item $dump.FullName "$Root\data\backups\" -Force
     Write-Host "Restoring the database from $($dump.Name)..."
     & $VenvPy -X utf8 -c "import sys; from pathlib import Path; from app import backup; backup.restore(Path(sys.argv[1]))" $dump.FullName
-    if ($LASTEXITCODE -ne 0) { Fail "Restoring the database failed (see above)" }
-    Ok "Database restored: students, ratings, admins and settings are back"
+    if ($LASTEXITCODE -ne 0) { Fail "Restoring the database failed (see above) - the data that was here is unchanged" }
+    Ok "Database restored: users, ratings, groups, admins and settings are back"
 } elseif ($Unpacked) {
-    Write-Host "The database already has data - not replaced (to replace it: scripts\server.bat restore <file>)"
+    Write-Host "The data that was here is kept (the transfer file's data was not used)."
     if (-not (Test-Path "$Root\.env")) { Copy-Item "$Unpacked\.env" "$Root\.env" }
 }
 if ($Unpacked) {

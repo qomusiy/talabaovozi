@@ -45,7 +45,6 @@
           <option value="">{{ t('all_courses') }}</option>
           {% for c in courses %}<option value="{{ c }}">{{ t('course_n', n=c) }}</option>{% endfor %}
         </select></label>
-      <a class="act" href="{{ url('/admin/students') }}" data-tip="{{ t('tip_all_students') }}">{{ t('all_students') }}<span class="arr">→</span></a>
     </div>
   </div>
   <div class="table-wrap">
@@ -64,9 +63,9 @@
     <tbody>
     {% for g in rows %}
       <tr data-course="{{ g.course or '' }}">
-        <td data-v="{{ g.name }}"><a class="row-link" href="{{ url('/admin/students', group=g.id) }}" data-tip="{{ t('tip_group_students') }}"><b>{{ g.name }}</b></a></td>
+        <td data-v="{{ g.name }}"><a class="row-link" href="{{ url('/admin/comments', group=g.id) }}" data-tip="{{ t('tip_group_comments') }}"><b>{{ g.name }}</b></a></td>
         <td class="r">{{ g.course or '—' }}</td>
-        <td class="r">{{ g.students }}</td>
+        <td class="r" data-v="{{ g.students }}">{{ g.students or '—' }}</td>
         <td class="r" data-v="{{ g.registered }}">{{ g.registered }} <span class="muted">· {{ g.registered_pct }}%</span></td>
         <td class="r">{{ g.participants }}</td>
         <td class="r" data-v="{{ g.participation_pct }}"><span class="bar-cell">{{ g.participation_pct }}%<span class="track"><i style="width:{{ g.participation_pct }}%"></i></span></span></td>

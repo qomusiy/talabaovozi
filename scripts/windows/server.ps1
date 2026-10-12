@@ -27,6 +27,15 @@ function Stop-Server {   # the task's programs end with it; the loop is the safe
         ($_.Name -eq "python.exe" -and $_.CommandLine -match "-m app\.(server|web|bot)") -or
         ($_.Name -eq "cloudflared.exe" -and $_.CommandLine -like "*$Root*") } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Remove-Item "$Root\data\runtime\server_status.json" -ErrorAction SilentlyContinue   # no stale "running"
+}
+
+function Wait-Started {   # until the new server reports (at most a minute)
+    Write-Host "Starting..."
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Seconds 2
+        if (Test-Path "$Runtime\server_status.json") { Start-Sleep -Seconds 3; break }
+    }
 }
 
 function Show-Status {
@@ -36,7 +45,8 @@ function Show-Status {
     $status = $null
     if (Test-Path "$Runtime\server_status.json") {
         $status = Get-Content "$Runtime\server_status.json" -Raw | ConvertFrom-Json
-        if ($now - $status.at -gt 60) { $status = $null }   # not written for a minute: the server is not running
+        # written in the last minute, by a server that still runs
+        if ($now - $status.at -gt 60 -or -not (Get-Process -Id $status.pid -ErrorAction SilentlyContinue)) { $status = $null }
     }
     if ($task.State -ne "Running" -or -not $status) {
         Write-Host ("  server   NOT running (task: " + $task.State + ")  -  scripts\server.bat start") -ForegroundColor Red
@@ -82,18 +92,18 @@ if ($needsAdmin -and -not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::
 
 switch ($Command) {
     "status" { Show-Status }
-    "start" { Start-ScheduledTask -TaskName $TaskName; Write-Host "Starting..."; Start-Sleep -Seconds 15; Show-Status }
+    "start" { Start-ScheduledTask -TaskName $TaskName; Wait-Started; Show-Status }
     "stop" { Stop-Server; Write-Host "Stopped. It starts again with Windows, or: scripts\server.bat start" }
     "restart" {
         Stop-Server; Start-Sleep -Seconds 2; Start-ScheduledTask -TaskName $TaskName
-        Write-Host "Restarting..."; Start-Sleep -Seconds 15; Show-Status
+        Wait-Started; Show-Status
     }
     "update" {
         if (-not $Elevated) { & git -C $Root pull --ff-only }   # already done before asking for rights
         Stop-Server
         & $VenvPy -m pip install -q --disable-pip-version-check -r "$Root\requirements.txt"
         Start-ScheduledTask -TaskName $TaskName   # the server updates the database when it starts
-        Write-Host "Updated, starting..."; Start-Sleep -Seconds 20; Show-Status
+        Wait-Started; Show-Status
     }
     "logs" {
         $name = if ($Arg) { $Arg } else { "server" }
@@ -107,7 +117,7 @@ switch ($Command) {
         Stop-Server
         & $VenvPy -X utf8 -m app.backup restore $Arg
         Start-ScheduledTask -TaskName $TaskName
-        Write-Host "Starting..."; Start-Sleep -Seconds 15; Show-Status
+        Wait-Started; Show-Status
     }
     default { Get-Content $PSCommandPath | Select-Object -Skip 1 -First 15 }
 }

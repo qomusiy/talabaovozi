@@ -1,4 +1,5 @@
-/* Talaba Ovozi — student survey (Telegram Mini App). No framework: state -> render functions -> innerHTML. */
+/* Talaba Ovozi — the survey (Telegram Mini App). No framework: state -> render functions -> innerHTML.
+   With a group picked in the bot: that group's teachers, one after another. Without one: every teacher, with a search. */
 (() => {
   const CRITERIA = ["teaching", "fairness", "professionalism"];
   // Icons: Lucide (ISC license), inlined.
@@ -20,24 +21,26 @@
     inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
     phone: '<rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/>',
     group: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+    search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+    lock: '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
   };
   const icon = (name, cls = "") => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`;
 
   const tg = window.Telegram && window.Telegram.WebApp;
   const inTelegram = !!(tg && tg.initData);
-  const devHemis = new URLSearchParams(location.search).get("dev");
+  const devUser = new URLSearchParams(location.search).get("dev");  // DEV_MODE, on this computer: ?dev=<Telegram id>
   const app = document.getElementById("app");
 
   let T = window.FALLBACK_TEXTS.uz;
   let data = null;
   let S = { comments: true, comment_required: false, edit: true, notice: "" }; // survey settings from the dashboard
+  let query = "";  // the search, without a group
 
   // ---------- Helpers ----------
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const fmt = (s, vars) => s.replace(/\{(\w+)\}/g, (_, k) => vars[k]);
   const avg = (fb) => (CRITERIA.reduce((s, c) => s + fb[c], 0) / CRITERIA.length).toFixed(1);
-  const band = (v) => (v <= 2 ? 1 : v <= 4 ? 2 : v <= 6 ? 3 : v <= 8 ? 4 : 5);
   const isDark = () => document.documentElement.dataset.theme === "dark";
 
   function haptic(kind) {
@@ -54,7 +57,7 @@
   function headers() {
     const h = { "Content-Type": "application/json" };
     if (inTelegram) h["X-Telegram-Init-Data"] = tg.initData;
-    else if (devHemis) h["X-Dev-Hemis"] = devHemis;
+    else if (devUser) h["X-Dev-User"] = devUser;
     return h;
   }
   function toast(msg, kind = "ok") {
@@ -82,9 +85,13 @@
       year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(data.campaign.closes_at));
     return fmt(T.closes, { date: s.replace(",", "") });
   }
-  /** Unrated teachers first, so the next one to do is always on top. */
-  const ordered = () => [...data.teachers].sort((a, b) => (!!a.feedback - !!b.feedback) || a.name.localeCompare(b.name));
+  const allMode = () => !data.group;
+  /** With a group: unrated teachers first, so the next one to do is on top. Without: the ones rated first. */
+  const ordered = () => [...data.teachers].sort((a, b) =>
+    (allMode() ? !!b.feedback - !!a.feedback : !!a.feedback - !!b.feedback) || a.name.localeCompare(b.name));
   const ratedCount = () => data.teachers.filter((t) => t.feedback).length;
+  const fold = (s) => String(s || "").toLowerCase().replace(/[‘’ʻʼ'`]/g, "");
+  const matches = (t, q) => !q || fold([t.name, t.department, ...t.subjects.map((x) => x.name)].join(" ")).includes(q);
 
   function state(iconName, title, text, tone = "") {
     setBackButton(null);
@@ -95,12 +102,67 @@
   }
 
   // ---------- List ----------
+  const SHOWN = 60;  // without a group: at most this many cards until the search narrows them down
+  function cards(list) {
+    return list.map((t, i) => `
+      <button class="t-card fade" style="animation-delay:${Math.min(i, 8) * 30}ms" data-id="${t.id}">
+        <span><div class="name">${esc(t.name)}</div>
+          <div class="subj">${esc(allMode() && t.department ? t.department : t.subjects.map((s) => s.name).join(" · "))}</div></span>
+        ${t.feedback
+          ? `<span class="status done">${icon("check")}${avg(t.feedback)}</span>`
+          : `<span class="status">${esc(T.rate)}${icon("chevR")}</span>`}
+      </button>`).join("");
+  }
+  function bindCards(root) {
+    root.querySelectorAll(".t-card").forEach((b) => b.addEventListener("click", () => {
+      const t = data.teachers.find((x) => x.id === Number(b.dataset.id));
+      if (t.feedback && !S.edit) { haptic("warning"); return toast(T.rating_locked, "error"); }
+      renderForm(t.id);
+    }));
+  }
+  /** Without a group: the teachers rated so far, then everyone that matches the search. */
+  function allList() {
+    const q = fold(query.trim());
+    const rated = ordered().filter((t) => t.feedback && matches(t, q));
+    const rest = ordered().filter((t) => !t.feedback && matches(t, q));
+    if (!rated.length && !rest.length) return `<p class="no-results">${esc(T.nothing_found)}</p>`;
+    return (rated.length ? `<div class="section-title"><h3>${esc(T.rated_section)}</h3><span>${rated.length}</span></div>${cards(rated)}` : "")
+      + `<div class="section-title"><h3>${esc(T.all_teachers)}</h3><span>${rest.length}</span></div>${cards(rest.slice(0, SHOWN))}`;
+  }
   function renderList() {
     setBackButton(null);
     headerColor(isDark() ? "#0d1117" : "#f4f5f9");
     const done = ratedCount(), total = data.teachers.length;
     const C = 2 * Math.PI * 30;
     const offset = C * (1 - (total ? done / total : 0));
+    const notice = S.notice ? `<div class="note notice fade">${icon("info")}<span>${esc(S.notice)}</span></div>` : "";
+    if (allMode()) {
+      show(`
+        <main class="wrap">
+          <section class="summary fade">
+            <div class="badge pop">${icon("users")}</div>
+            <div>
+              <h2>${esc(T.title)}</h2>
+              <div class="line">${icon("check")}${esc(fmt(T.rated_n, { n: done }))}</div>
+              <div class="line">${icon("clock")}${esc(closesText())}</div>
+            </div>
+          </section>
+          ${notice}
+          <div class="note fade">${icon("info")}<span>${esc(T.no_group_note)}</span></div>
+          <label class="search fade">${icon("search")}<input type="search" id="q" value="${esc(query)}"
+            placeholder="${esc(T.search)}" aria-label="${esc(T.search)}" autocomplete="off"></label>
+          <section id="cards">${allList()}</section>
+          <div style="height:24px"></div>
+        </main>`);
+      const box = document.getElementById("cards");
+      bindCards(box);
+      document.getElementById("q").addEventListener("input", (e) => {
+        query = e.target.value;
+        box.innerHTML = allList();
+        bindCards(box);
+      });
+      return;
+    }
     show(`
       <main class="wrap">
         <section class="summary fade">
@@ -111,36 +173,24 @@
           </div>
           <div>
             <h2>${esc(T.title)}</h2>
+            <div class="line">${icon("group")}${esc(data.group)}</div>
             <div class="line">${icon("check")}${esc(fmt(T.progress, { done, total }))}</div>
             <div class="line">${icon("clock")}${esc(closesText())}</div>
           </div>
         </section>
-        ${S.notice ? `<div class="note notice fade">${icon("info")}<span>${esc(S.notice)}</span></div>` : ""}
+        ${notice}
         <div class="section-title"><h3>${esc(T.your_teachers)}</h3><span>${total}</span></div>
-        <section>
-          ${ordered().map((t, i) => `
-            <button class="t-card fade" style="animation-delay:${Math.min(i, 8) * 30}ms" data-id="${t.id}">
-              <span><div class="name">${esc(t.name)}</div>
-                <div class="subj">${esc(t.subjects.map((s) => s.name).join(" · "))}</div></span>
-              ${t.feedback
-                ? `<span class="status done">${icon("check")}${avg(t.feedback)}</span>`
-                : `<span class="status">${esc(T.rate)}${icon("chevR")}</span>`}
-            </button>`).join("")}
-        </section>
+        <section id="cards">${cards(ordered())}</section>
         <div style="height:24px"></div>
       </main>`);
-    app.querySelectorAll(".t-card").forEach((b) => b.addEventListener("click", () => {
-      const t = data.teachers.find((x) => x.id === Number(b.dataset.id));
-      if (t.feedback && !S.edit) { haptic("warning"); return toast(T.rating_locked, "error"); }
-      renderForm(t.id);
-    }));
+    bindCards(app);
   }
 
   // ---------- Form ----------
   // One structured form: the teacher, the three criteria on a 1-10 scale, the comment (optional or required).
   const COMMENT_MIN = 10;  // characters, when the dashboard makes the comment required
   function renderForm(teacherId) {
-    const list = ordered();
+    const list = allMode() ? data.teachers.filter((x) => x.feedback || x.id === teacherId) : ordered();
     const t = data.teachers.find((x) => x.id === teacherId);
     const pos = list.findIndex((x) => x.id === teacherId) + 1;
     const values = Object.fromEntries(CRITERIA.map((c) => [c, t.feedback ? t.feedback[c] : null]));
@@ -157,9 +207,9 @@
     show(`
       <div class="topbar"><div class="wrap">
         <button class="icon-btn" id="back" aria-label="${esc(T.back_to_list)}">${icon("chevL")}</button>
-        <span class="step">${esc(fmt(T.teacher_step, { n: pos, total: list.length }))}</span>
-        <span class="topbar-count">${done} / ${list.length}</span>
-      </div><div class="topbar-progress"><i style="width:${list.length ? (100 * done) / list.length : 0}%"></i></div></div>
+        <span class="step">${esc(allMode() ? T.all_teachers : fmt(T.teacher_step, { n: pos, total: list.length }))}</span>
+        <span class="topbar-count">${allMode() ? esc(fmt(T.rated_n, { n: done })) : `${done} / ${list.length}`}</span>
+      </div><div class="topbar-progress"><i style="width:${allMode() ? 0 : list.length ? (100 * done) / list.length : 0}%"></i></div></div>
       <main class="wrap">
         <section class="card teacher">
           <h2>${esc(t.name)}</h2>
@@ -182,7 +232,6 @@
                 ${Array.from({ length: 10 }, (_, k) =>
                   `<button class="chip" type="button" role="radio" aria-checked="false" data-v="${k + 1}">${k + 1}</button>`).join("")}
               </div>
-              <div class="ends"><span>${esc(T.scale_low)}</span><span>${esc(T.scale_high)}</span></div>
             </div>`).join("")}
         </section>
         ${S.comments ? `<section class="card comment-card">
@@ -215,8 +264,7 @@
       });
       const score = section.querySelector(".score");
       score.classList.toggle("empty", !v);
-      score.innerHTML = v ? `<div class="v">${v}<small> / 10</small></div><div class="w">${esc(T["band_" + band(v)])}</div>`
-        : `<div class="v">—<small> / 10</small></div>`;
+      score.innerHTML = `<div class="v">${v || "—"}<small> / 10</small></div>`;
     };
     app.querySelectorAll(".criterion").forEach((section) => {
       paint(section);
@@ -271,12 +319,15 @@
         if (detail === "no_campaign") return fail(T.closed_now);
         if (detail === "locked") return fail(T.rating_locked);
         if (detail === "comment_required") return fail(fmt(T.need_comment, { n: COMMENT_MIN }));
+        if (detail === "too_many") return fail(T.too_many);
+        if (detail === "blocked" || detail === "suspended") return state("lock", "Talaba Ovozi", T.blocked, "bad");
         if (res.status === 401 || res.status === 403) return fail(T.session_expired);
         return fail(T.error);
       }
       t.feedback = { ...values, comment: comment ? comment.value : "" };
       haptic("success");
       toast(T.saved);
+      if (allMode()) return renderList();
       const next = ordered().find((x) => !x.feedback);
       if (next) renderForm(next.id);
       else renderDone();
@@ -326,12 +377,16 @@
         document.documentElement.dataset.theme = tg.colorScheme === "dark" ? "dark" : "light";
       });
     }
-    if (!inTelegram && !devHemis) return state("phone", "Talaba Ovozi", T.open_in_telegram);
+    if (!inTelegram && !devUser) return state("phone", "Talaba Ovozi", T.open_in_telegram);
     let res;
     try {
       res = await fetch("/api/survey", { headers: headers() });
     } catch (e) {
       return state("alert", "Talaba Ovozi", T.network_error, "bad");
+    }
+    if (res.status === 403) {
+      const detail = await res.json().then((j) => j.detail, () => null);
+      if (detail === "blocked" || detail === "suspended") return state("lock", "Talaba Ovozi", T.blocked, "bad");
     }
     if (res.status === 401 || res.status === 403) return state("phone", "Talaba Ovozi", T.session_expired);
     if (!res.ok) return state("alert", "Talaba Ovozi", T.error, "bad");
@@ -341,7 +396,7 @@
     document.documentElement.lang = data.lang;
     if (!data.campaign) return state("inbox", T.no_campaign_title, T.no_campaign_text);
     if (!data.teachers.length) return state("inbox", T.title, T.no_teachers);
-    if (ratedCount() === data.teachers.length) return renderDone();
+    if (!allMode() && ratedCount() === data.teachers.length) return renderDone();
     renderList();
   }
 

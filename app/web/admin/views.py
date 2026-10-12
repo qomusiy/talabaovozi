@@ -20,8 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.faculty import specialty_name
-from app.models import RATING_CRITERIA, Admin, Teacher
-from app.security import temporary_passport, verify_password
+from app.db import SessionLocal
+from app.models import RATING_CRITERIA, Admin, Group, Teacher
+from app.security import verify_password
 from app.services.teaching import refresh_from_edupage
 from app.timetable import view as ttv
 from app.web.admin import analytics as an
@@ -34,7 +35,6 @@ from app.web.templating import templates
 router = APIRouter(prefix="/admin")
 log = logging.getLogger("admin")
 LANG_COOKIE = "admin_lang"
-STATUSES = ("not_registered", "registered", "partial", "completed")
 TASHKENT = ZoneInfo("Asia/Tashkent")
 
 
@@ -72,11 +72,11 @@ async def resolve_campaign(session: AsyncSession, raw: str | None) -> tuple[int 
 # The browser remembers the path taken to a page (static/crumbs.js) and shows it as "Teachers › Name › Timetable".
 # Each page describes itself; labels carry their text key so they can be shown again later in another language.
 SECTIONS = {"/admin": "nav_overview", "/admin/teachers": "nav_teachers", "/admin/groups": "nav_groups",
-            "/admin/students": "nav_students", "/admin/comments": "nav_comments", "/admin/timetable": "tt_title",
+            "/admin/users": "nav_users", "/admin/comments": "nav_comments", "/admin/timetable": "tt_title",
             "/admin/surveys": "nav_surveys", "/admin/data": "nav_data", "/admin/records": "nav_records", "/admin/audit": "nav_audit",
             "/admin/bot": "nav_bot", "/admin/admins": "nav_admins", "/admin/account": "nav_account",
             "/admin/chats": "nav_chats"}
-CRUMB_TEXTS = (*SECTIONS.values(), "tt_feedback", "students_of")
+CRUMB_TEXTS = (*SECTIONS.values(), "tt_feedback")
 
 
 def label(t, key: str, **params) -> dict:
@@ -106,6 +106,19 @@ def section(t, url, path: str, **params) -> dict:
     return {"label": label(t, SECTIONS[path]), "kind": path, "path": path, "url": url(path, **params)}
 
 
+async def group_namer(request: Request, admin: Admin):
+    """name -> "302 · 24-09 BXA (ing)" for groups that have a number, when this person shows group numbers
+    (Ko‘rinish); otherwise names stay as they are. Once per request."""
+    if not hasattr(request.state, "grp"):
+        numbers = {}
+        if display.clean(admin.prefs)["group_numbers"]:
+            async with SessionLocal() as session:
+                numbers = dict((await session.execute(
+                    select(Group.name, Group.number).where(Group.number.is_not(None)))).all())
+        request.state.grp = lambda name: f"{numbers[name]} · {name}" if name in numbers else name
+    return request.state.grp
+
+
 async def render(request: Request, template: str, admin: Admin, campaign: tuple[int | None, list],
                  crumb: dict | None = None, parents: list[dict] | None = None, **ctx) -> HTMLResponse:
     campaign_id, campaigns = campaign
@@ -133,14 +146,15 @@ async def render(request: Request, template: str, admin: Admin, campaign: tuple[
         "is_super": admin.is_super, "is_programmer": admin.is_programmer, "show_who": admin.sees_identity,
         "flash": request.session.pop("flash", None), "now_hm": datetime.now(TASHKENT).strftime("%H:%M"),
         "display": display.clean(admin.prefs), "display_attrs": display.html_attrs(admin.prefs),
+        "grp": await group_namer(request, admin),
         "demo_active": any(c.is_demo for c in campaigns), **ctx,
     })
 
 
-def without_students(rows: list[dict], t) -> list[dict]:
-    """For viewers who may not see who rated (Adminlar › "show who rated" off): the student's name becomes
-    "Talaba"; the group stays. Done here, so the names are not in the page at all (not even its data)."""
-    return [{**r, "student": t("anon_student"), "hemis": None} for r in rows]
+def without_names(rows: list[dict]) -> list[dict]:
+    """Who rated is for programmer accounts only (Admin.sees_identity): for everyone else it is taken out here, so
+    it is not in the page at all (not even its data). The group stays."""
+    return [{**r, "who": None, "user_id": None} for r in rows]
 
 
 def department_groups(departments: list, t) -> list[tuple[str, list]]:
@@ -251,7 +265,7 @@ async def overview(request: Request, campaign: str | None = None, admin: Admin =
         greeting=t(greeting_key()), kpis=kpis, deltas=deltas, prev=prev, status=status,
         ranking=ranking, most_n=most[0]["n"] if most else 1,
         attention=[x for x in reversed(rated) if x["overall"] < 6][:6],
-        comments=(lambda rows: rows if admin.sees_identity else without_students(rows, t))(
+        comments=(lambda rows: rows if admin.sees_identity else without_names(rows))(
             await an.latest_comments(session, cid, limit=5)),
         data={
             "daily": await an.daily_submissions(session, cid),
@@ -284,7 +298,10 @@ async def teacher(request: Request, teacher_id: int, campaign: str | None = None
         raise HTTPException(404)
     t = translator(get_lang(request))
     if not admin.sees_identity:
-        detail["feedback"] = without_students(detail["feedback"], t)
+        detail["feedback"] = without_names(detail["feedback"])
+    grp = await group_namer(request, admin)
+    detail["by_group"] = [{**g, "name": grp(g["name"])} for g in detail["by_group"]]
+    detail["feedback"] = [{**f, "group": grp(f["group"])} for f in detail["feedback"]]
     tt = await ttv.latest(session)
     return await render(request, "admin/teacher.html", admin, (cid, campaigns),
                         crumb(plain(detail["teacher"]["name"]), "teacher", f"teacher:{teacher_id}", label(t, "tt_feedback")),
@@ -298,7 +315,8 @@ async def groups(request: Request, campaign: str | None = None,
                  admin: Admin = Depends(current_admin), session: AsyncSession = Depends(get_session, scope="function")):
     """Charts and figures cover every group; the course filter and search only narrow the table (admin.js)."""
     cid, campaigns = await resolve_campaign(session, campaign)
-    rows = await an.group_table(session, cid)
+    grp = await group_namer(request, admin)
+    rows = [{**g, "name": grp(g["name"])} for g in await an.group_table(session, cid)]
     students = sum(g["students"] for g in rows)
     active = [g for g in rows if g["students"]]
     summary = {
@@ -311,22 +329,10 @@ async def groups(request: Request, campaign: str | None = None,
                         courses=sorted({g["course"] for g in rows if g["course"]}), summary=summary, data={"groups": rows, "courses": an.course_summary(rows)})
 
 
-@router.get("/students", response_class=HTMLResponse)
-async def students(request: Request, campaign: str | None = None, group: OptionalId = None,
-                   status: str | None = None, q: str | None = None, page: PageNumber = 1,
-                   admin: Admin = Depends(current_admin), session: AsyncSession = Depends(get_session, scope="function")):
-    cid, campaigns = await resolve_campaign(session, campaign)
-    per_page = 50
-    result = await an.student_table(session, cid, group, status, q, max(page, 1), per_page)
-    groups = await an.all_groups(session)
-    chosen = next((g for g in groups if g.id == group), None)
-    t = translator(get_lang(request))
-    return await render(request, "admin/students.html", admin, (cid, campaigns),
-                        crumb(label(t, "students_of", group=chosen.name), "/admin/students", f"group:{chosen.id}")
-                        if chosen else None, [section(t, campaign_url(cid), "/admin/groups")],
-                        temporary_passport=temporary_passport,
-                        result=result, groups=groups, group_id=group, status=status, q=q or "",
-                        page=max(page, 1), pages=max(1, math.ceil(result.total / per_page)), statuses=STATUSES)
+@router.get("/students")
+async def students(admin: Admin = Depends(current_admin)):
+    """The student list is gone (the survey is anonymous): old links lead to the groups."""
+    return RedirectResponse("/admin/groups", status_code=303)
 
 
 @router.get("/comments", response_class=HTMLResponse)
@@ -335,11 +341,10 @@ async def comments(request: Request, campaign: str | None = None, q: str | None 
                    admin: Admin = Depends(current_admin), session: AsyncSession = Depends(get_session, scope="function")):
     cid, campaigns = await resolve_campaign(session, campaign)
     per_page = 30
-    t = translator(get_lang(request))
     result = await an.comment_feed(session, cid, q, band, teacher, group, max(page, 1), per_page,
-                                   by_student=admin.sees_identity)
+                                   by_user=admin.sees_identity)
     if not admin.sees_identity:
-        result.rows = without_students(result.rows, t)
+        result.rows = without_names(result.rows)
     # With a group chosen only its teachers are offered, with a teacher only their groups (others would show nothing).
     links = await an.teacher_group_links(session, cid)
     teachers_ = [x for x in await an.all_teachers(session) if not group or x.id == teacher or (x.id, group) in links]
@@ -481,11 +486,12 @@ async def export_comments(request: Request, campaign: str | None = None, q: str 
     """The comments page as a spreadsheet, with the filters that are set on it."""
     cid, _ = await resolve_campaign(session, campaign)
     t = translator(get_lang(request))
-    rows = await an.comment_export_rows(session, cid, q, band, teacher, group, by_student=admin.sees_identity)
-    rows = [(*r[:10], float(r[10]) if r[10] is not None else None, r[11]) for r in rows]
-    headers = [t("col_survey"), t("col_date"), t("col_teacher"), t("col_department"), t("col_student"), "HEMIS",
+    rows = await an.comment_export_rows(session, cid, q, band, teacher, group, by_user=admin.sees_identity)
+    grp = await group_namer(request, admin)
+    rows = [(*r[:6], grp(r[6]), *r[7:10], float(r[10]) if r[10] is not None else None, r[11]) for r in rows]
+    headers = [t("col_survey"), t("col_date"), t("col_teacher"), t("col_department"), t("col_who"), "Telegram ID",
                t("col_group"), *criteria_labels(t).values(), t("overall"), t("col_comment")]
-    if not admin.sees_identity:  # no student name or HEMIS id in the file
+    if not admin.sees_identity:  # who rated is not in the file
         headers = headers[:4] + headers[6:]
         rows = [r[:4] + r[6:] for r in rows]
     return xlsx_response("comments", headers, rows)

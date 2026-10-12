@@ -8,9 +8,11 @@ from markupsafe import Markup, escape
 
 TEXT_SIZES = (90, 100, 112, 125, 150)   # percent of the normal size
 THEMES = ("auto", "light", "dark")
+# hide_names: this person's own panel doesn't show who rated (Admin.sees_identity);
+# group_numbers: groups show the number students know them by too, "302 · 24-09 BXA (ing)" (Group.number).
 DEFAULTS = {"text": 100, "theme": "auto", "contrast": False, "motion": False, "spacing": False, "links": False,
-            "hide_names": False}  # hide_names: this person's own panel doesn't show who rated (Admin.sees_identity)
-FLAGS = ("contrast", "motion", "spacing", "links", "hide_names")
+            "hide_names": False, "group_numbers": False}
+FLAGS = ("contrast", "motion", "spacing", "links", "hide_names", "group_numbers")
 
 
 def clean(prefs: dict | None) -> dict:

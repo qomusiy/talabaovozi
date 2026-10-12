@@ -2,6 +2,7 @@
 import asyncio
 import re
 from datetime import date, datetime, timedelta, timezone
+from io import BytesIO
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -9,9 +10,9 @@ from sqlalchemy import func, select
 
 from app import demo, settings_store
 from app.importers.templates import template_xlsx
-from app.models import (Admin, Broadcast, Department, Feedback, Group, ImportLog, Semester, Student, SurveyCampaign,
+from app.models import (Admin, Broadcast, BotUser, Department, Feedback, Group, ImportLog, Semester, SurveyCampaign,
                         Teacher, TeachingAssignment)
-from app.security import hash_passport, hash_password, temporary_passport
+from app.security import hash_password
 from app.services import broadcast, teaching
 from app.web.main import create_app
 from app.web.security import throttle
@@ -106,7 +107,7 @@ async def test_timetable_teachers_get_a_kafedra(session, world):
 
 async def test_edit_teachers_and_kafedras(boss, session):
     await with_timetable(session)
-    for tab in ("teachers", "departments", "groups", "students"):
+    for tab in ("teachers", "departments", "groups"):
         assert (await boss.get(f"/admin/records?tab={tab}")).status_code == 200, tab
     teacher = await session.scalar(select(Teacher).where(Teacher.full_name == "Qodirov RS"))
     r = await boss.post("/admin/records/departments/new", data={"name": "Oliy matematika", "faculty": "Yer resurslari va kadastr"})
@@ -135,44 +136,74 @@ async def test_edit_teachers_and_kafedras(boss, session):
     assert (await session.get(Department, teacher.department_id)).name == "Iqtisodiyot"
 
 
-async def test_edit_groups_and_students(boss, session, world):
+async def test_edit_groups_and_their_sizes(boss, session, world):
     await with_timetable(session)
     timetable_group = await session.scalar(select(Group).where(Group.name == "26-01 IQT"))
     before = (timetable_group.name, timetable_group.course, timetable_group.language)
-    await boss.post(f"/admin/records/groups/{timetable_group.id}", data={"name": "Renamed", "course": "4", "language": "ru"})
+    await boss.post(f"/admin/records/groups/{timetable_group.id}",
+                    data={"name": "Renamed", "course": "4", "language": "ru", "students": "27"})
     await session.refresh(timetable_group)
     assert (timetable_group.name, timetable_group.course, timetable_group.language) == before  # the timetable's
-    await boss.post("/admin/records/groups/new", data={"name": "26-99 BXA", "course": "1"})
+    assert timetable_group.student_count == 27                                                # but the size is ours
+    await boss.post("/admin/records/groups/new", data={"name": "26-99 BXA", "course": "1", "students": "20"})
     group = await session.scalar(select(Group).where(Group.name == "26-99 BXA"))
-    assert (group.key, group.code, group.course) == ("26-99 BXA", "BXA", 1)
+    assert (group.key, group.code, group.course, group.student_count) == ("26-99 BXA", "BXA", 1, 20)
     await boss.post(f"/admin/records/groups/{group.id}", data={"name": "26-98 BXA (ru)", "course": "2", "language": "ru"})
     await session.refresh(group)
-    assert (group.name, group.key, group.course, group.language) == ("26-98 BXA (ru)", "26-98 BXA", 2, "ru")
+    assert (group.name, group.key, group.course, group.language, group.student_count) == (
+        "26-98 BXA (ru)", "26-98 BXA", 2, "ru", None)
+    r = await boss.post(f"/admin/records/groups/{group.id}", data={"name": "26-98 BXA (ru)", "students": "many"})
+    assert "0 dan 1000 gacha" in (await boss.get(r.headers["location"])).text
+    assert "26-98 BXA (ru)" in (await boss.get("/admin/records?tab=groups")).text
 
-    await boss.post("/admin/records/students/new", data={"full_name": "Aliyev Vali", "hemis_id": "777", "group": str(group.id)})
-    st = await session.scalar(select(Student).where(Student.hemis_id == "777"))
-    assert st.group_id == group.id and st.passport_temporary and st.is_active
+    # A group that has ratings can't be deleted; a teacher who has them neither.
     exists = lambda model, id_: session.scalar(select(model.id).where(model.id == id_))  # noqa: E731
-    await boss.post(f"/admin/records/groups/{group.id}/delete", data={})
-    assert await exists(Group, group.id)                                    # still has a student
-    await boss.post(f"/admin/records/students/{st.id}", data={"full_name": "Aliyev Vali", "hemis_id": "777",
-                                                              "passport": "ab 123 4567", "active": "true"})
-    await session.refresh(st)
-    assert st.group_id is None and not st.passport_temporary and st.passport_hash == hash_passport("AB1234567")
-    r = await boss.post(f"/admin/records/students/{st.id}", data={"full_name": "X", "hemis_id": "777", "passport": "bad"})
-    assert "pasport" in (await boss.get(r.headers["location"])).text.lower()
-
-    # Who has evaluations can't be deleted - only switched off.
     teacher = await session.scalar(select(Teacher).where(Teacher.full_name == "Qodirov RS"))
     camp = SurveyCampaign(semester=world["sem"], title="R", opens_at=datetime.now(timezone.utc) - timedelta(days=1),
                           closes_at=datetime.now(timezone.utc) + timedelta(days=1))
-    session.add_all([camp, Feedback(campaign=camp, student=st, teacher=teacher, teaching=8, fairness=8, professionalism=8)])
+    session.add_all([camp, BotUser(id=41)])
+    await session.flush()
+    session.add(Feedback(campaign=camp, user_id=41, teacher=teacher, group_id=group.id, teaching=8, fairness=8,
+                         professionalism=8))
     await session.commit()
     await boss.post(f"/admin/records/teachers/{teacher.id}/delete", data={})
-    await boss.post(f"/admin/records/students/{st.id}/delete", data={})
-    assert await exists(Teacher, teacher.id) and await exists(Student, st.id)
     await boss.post(f"/admin/records/groups/{group.id}/delete", data={})
-    assert not await exists(Group, group.id)                                # empty now: deleted
+    assert await exists(Teacher, teacher.id) and await exists(Group, group.id)
+    await session.execute(__import__("sqlalchemy").delete(Feedback))
+    await session.commit()
+    await boss.post(f"/admin/records/groups/{group.id}/delete", data={})
+    assert not await exists(Group, group.id)                                # no ratings now: deleted
+
+
+async def test_group_numbers_students_know(boss, session, world):
+    await with_timetable(session)
+    g1 = await session.scalar(select(Group).where(Group.name == "26-01 IQT"))
+    await boss.post(f"/admin/records/groups/{g1.id}", data={"number": " 302 ", "students": "25"})  # a timetable group too
+    await session.refresh(g1)
+    assert (g1.number, g1.student_count) == ("302", 25)
+    other = Group(name="26-77 BXA", course=1)
+    session.add(other)
+    await session.commit()
+    r = await boss.post(f"/admin/records/groups/{other.id}", data={"name": "26-77 BXA", "number": "302"})
+    assert "302" in (await boss.get(r.headers["location"])).text and (await session.get(Group, other.id)).number is None
+
+    # The analysis pages show it only for whoever switches it on (Ko‘rinish).
+    assert "302 · 26-01 IQT" not in (await boss.get("/admin/groups")).text
+    await boss.post("/admin/account/display", data={"group_numbers": "true"})
+    assert "302 · 26-01 IQT" in (await boss.get("/admin/groups")).text
+
+    # The group sizes file can carry numbers too; a row with only a number leaves the size alone.
+    from openpyxl import Workbook
+    wb = Workbook()
+    wb.active.append(["Guruh", "Raqami"])
+    wb.active.append(["26-01 IQT", "301"])
+    wb.active.append(["26-77 BXA", "301"])            # taken by the row above: an error, not a duplicate
+    buf = BytesIO()
+    wb.save(buf)
+    from app.importers import excel
+    report = await excel.import_group_sizes(session, BytesIO(buf.getvalue()))
+    await session.refresh(g1)
+    assert (g1.number, g1.student_count) == ("301", 25) and [e[1] for e in report.errors] == ["number_taken"]
 
 
 # ---------------------------------------------------------------- Access & security
@@ -207,7 +238,7 @@ async def test_forms_cannot_be_posted_from_other_sites(boss):
 async def test_every_management_page_renders(boss, session):
     await with_timetable(session)
     for url in ["/admin/surveys", "/admin/data", "/admin/bot", "/admin/admins", "/admin/account",
-                "/admin/timetable", "/admin/students"]:
+                "/admin/timetable", "/admin/records?tab=groups"]:
         assert (await boss.get(url)).status_code == 200, url
     for lang in ("en", "ru"):
         boss.cookies.set("admin_lang", lang)
@@ -281,21 +312,19 @@ async def test_round_times_compare_to_the_minute_and_stay_in_the_semester(boss, 
 async def test_demo_data_is_created_over_real_data_and_removed_cleanly(boss, session):
     await with_timetable(session)
     group = await session.scalar(select(Group).where(Group.name == "26-01 IQT"))
-    session.add_all([Student(hemis_id=str(100000 + i), full_name=f"S{i}", passport_hash="x", group_id=group.id)
-                     for i in range(40)])
-    real = Student(hemis_id="999999", full_name="Real", passport_hash="x", group_id=group.id, telegram_id=5,
-                   registered_at=datetime.now(timezone.utc))
-    session.add(real)
+    group.student_count = 40
+    session.add(BotUser(id=5, group_id=group.id, onboarded_at=datetime.now(timezone.utc)))   # a real account
     await session.commit()
     result = await demo.create_demo(session)
     await session.commit()
-    assert result["rounds"] == 3 and result["feedback"] > 0
+    assert result["rounds"] == 3 and result["feedback"] > 0 and 0 < result["students"] <= 40 + demo.DEFAULT_GROUP_SIZE
     assert "Demo" in (await boss.get("/admin")).text  # the banner
-    assert not await session.scalar(select(func.count(Feedback.id)).where(Feedback.student_id == real.id))
+    assert not await session.scalar(select(func.count(Feedback.id)).where(Feedback.user_id == 5))
+    assert await session.scalar(select(func.max(BotUser.id)).where(BotUser.is_demo)) < 0   # never a real account
 
     await boss.post("/admin/surveys/demo/clear")
     assert (await session.scalar(select(func.count(Feedback.id)))) == 0
-    assert (await session.scalar(select(func.count(Student.id)).where(Student.registered_at.is_not(None)))) == 1
+    assert (await session.scalar(select(func.count(BotUser.id)))) == 1                   # only the real one
 
 
 # ---------------------------------------------------------------- Data
@@ -308,12 +337,11 @@ async def test_uploads_and_templates(boss, session):
     files = {"file": ("students.xlsx", template_xlsx("students", sample=True).read(), XLSX)}
     r = await boss.post("/admin/data/students", files=files, follow_redirects=False)
     assert r.status_code == 303
-    assert "2 ta qo‘shildi" in (await boss.get("/admin/data")).text
-    temp = await session.scalar(select(Student).where(Student.passport_temporary))
-    assert temp is not None  # the template's second student has no passport
-    codes = await boss.get("/admin/data/temporary-codes.xlsx")
-    assert codes.status_code == 200
-    assert temporary_passport(temp.hemis_id) in (await boss.get("/admin/students")).text
+    assert "2 ta yangilandi" in (await boss.get("/admin/data")).text
+    assert dict((await session.execute(select(Group.name, Group.student_count))).all()) == {
+        "25-16 IQT": 28, "26-03 IQT (ru)": 25}
+    assert "53 talaba, 2 ta guruhda" in (await boss.get("/admin/data")).text
+    assert (await boss.get("/admin/data/temporary-codes.xlsx")).status_code == 404
 
     bad = {"file": ("x.xlsx", b"not a spreadsheet", XLSX)}
     await boss.post("/admin/data/students", files=bad)
@@ -359,8 +387,7 @@ async def test_bot_settings_change_the_survey(boss, session):
     await with_timetable(session)
     group = await session.scalar(select(Group).where(Group.name == "26-01 IQT"))
     teacher = await session.scalar(select(Teacher).where(Teacher.full_name == "Qodirov RS"))
-    st = Student(hemis_id="100001", full_name="Aziz", passport_hash=hash_passport("AA1234567"), group_id=group.id,
-                 telegram_id=555)
+    st = BotUser(id=555, group_id=group.id, onboarded_at=datetime.now(timezone.utc))
     now = datetime.now(timezone.utc)
     sem = await session.scalar(select(Semester).where(Semester.is_current))
     session.add_all([st, SurveyCampaign(semester=sem, title="R", opens_at=now - timedelta(days=1),
@@ -415,14 +442,17 @@ def png_bytes() -> bytes:
     return out.getvalue()
 
 
-async def test_broadcast_reaches_the_chosen_students(boss, session, monkeypatch, tmp_path):
+async def test_broadcast_reaches_the_chosen_users(boss, session, monkeypatch, tmp_path):
     await with_timetable(session)
     group = await session.scalar(select(Group).where(Group.name == "26-01 IQT"))
     other = await session.scalar(select(Group).where(Group.name == "26-03 IQT (ru)"))
-    session.add_all([Student(hemis_id="1000001", full_name="A", passport_hash="x", group_id=group.id, telegram_id=11),
-                     Student(hemis_id="1000002", full_name="B", passport_hash="x", group_id=other.id, telegram_id=12),
-                     Student(hemis_id="1000003", full_name="C", passport_hash="x", group_id=group.id)])  # not in bot
-    # Saidova teaches only 26-01 IQT: her kafedra's students are that group's.
+    now = datetime.now(timezone.utc)
+    session.add_all([BotUser(id=11, group_id=group.id, onboarded_at=now),
+                     BotUser(id=12, group_id=other.id, onboarded_at=now),
+                     BotUser(id=13, group_id=group.id),                               # hasn't finished the intro
+                     BotUser(id=14, group_id=group.id, onboarded_at=now, blocked=True),
+                     BotUser(id=-15, group_id=group.id, onboarded_at=now, is_demo=True)])  # demo: no real account
+    # Saidova teaches only 26-01 IQT: her kafedra's users are that group's.
     dept = Department(name="Buxgalteriya")
     session.add(dept)
     saidova = await session.scalar(select(Teacher).where(Teacher.full_name == "Saidova Madina"))
@@ -460,12 +490,12 @@ async def test_broadcast_reaches_the_chosen_students(boss, session, monkeypatch,
     b = await session.scalar(select(Broadcast).order_by(Broadcast.id.desc()))
     assert b.media_kind == "photo" and (tmp_path / b.media_name).is_file()
 
-    # "Send it to me first" needs the admin's Telegram id in the settings.
+    # "Send it to me first" needs the admin's own Telegram, linked on "My account".
     r = (await boss.post("/admin/bot/broadcast/test", data={"text": "Sinov"})).json()
     assert not r["ok"]
-    await settings_store.save(session, admin_telegram_ids=[99])
+    me = await session.scalar(select(Admin).where(Admin.username == "boss"))
+    me.telegram_id = 99
     await session.commit()
-    settings_store.reset_cache()
     FakeBot.sent = []
     r = (await boss.post("/admin/bot/broadcast/test", data={"text": "Sinov"})).json()
     assert r["ok"] and FakeBot.sent == [(99, "text", "Sinov")]
@@ -492,16 +522,6 @@ async def test_admins_and_password(boss, session):
     async with AsyncClient(transport=ASGITransport(app=create_app()), base_url="http://test") as c:
         r = await c.post("/admin/login", data={"username": "boss", "password": "newsecret1"}, follow_redirects=False)
         assert r.status_code == 303
-
-
-async def test_unlink_a_student_from_telegram(boss, session):
-    st = Student(hemis_id="100001", full_name="Aziz", passport_hash="x", telegram_id=555, survey_message_id=3)
-    session.add(st)
-    await session.commit()
-    assert "uzish" in (await boss.get("/admin/students")).text
-    await boss.post(f"/admin/students/{st.id}/unlink")
-    await session.refresh(st)
-    assert st.telegram_id is None and st.survey_message_id is None
 
 
 # ---------------------------------------------------------------- Programmer, activity log, viewers without names
@@ -561,16 +581,28 @@ async def test_activity_log_records_logins_pages_and_changes(boss, dev, session)
     assert "boss" in (await dev.get("/admin/audit")).text                    # the session list
 
 
-async def test_programmer_can_change_and_delete_a_rating(boss, dev, session, world):
+async def rated_by_aziz(session, world, comment="Zo‘r dars"):
+    """A rating by the account of "Aziz Karimov" (@aziz_k, Telegram id 5551234)."""
     await with_timetable(session)
     teacher = await session.scalar(select(Teacher).where(Teacher.full_name == "Qodirov RS"))
-    student = Student(hemis_id="5", full_name="Talaba Bir", passport_hash=hash_passport("AB1234567"))
+    group = await session.scalar(select(Group).where(Group.name == "26-01 IQT"))
     camp = SurveyCampaign(semester=world["sem"], title="R", opens_at=datetime.now(timezone.utc) - timedelta(days=1),
                           closes_at=datetime.now(timezone.utc) + timedelta(days=1))
-    fb = Feedback(campaign=camp, student=student, teacher=teacher, teaching=3, fairness=4, professionalism=5)
-    session.add_all([student, camp, fb])
+    user = BotUser(id=5551234, first_name="Aziz", last_name="Karimov", username="aziz_k", group_id=group.id,
+                   onboarded_at=datetime.now(timezone.utc), profile={"chat": {"bio": "talaba"}})
+    session.add_all([camp, user])
+    await session.flush()
+    fb = Feedback(campaign=camp, user_id=user.id, teacher=teacher, group_id=group.id, teaching=3, fairness=4,
+                  professionalism=5, comment=comment)
+    session.add(fb)
     await session.commit()
-    assert "Talaba Bir" in (await dev.get("/admin/records?tab=feedback&q=Talaba")).text
+    return user, teacher, camp, fb
+
+
+async def test_programmer_can_change_and_delete_a_rating(boss, dev, session, world):
+    user, teacher, camp, fb = await rated_by_aziz(session, world)
+    assert "Aziz Karimov" in (await dev.get("/admin/records?tab=feedback&q=aziz_k")).text
+    assert "Aziz Karimov" in (await dev.get("/admin/records?tab=feedback&q=5551234")).text
     assert (await boss.post(f"/admin/records/feedback/{fb.id}", data={"teaching": "9", "fairness": "9",
                                                                        "professionalism": "9"})).status_code == 404
     await dev.post(f"/admin/records/feedback/{fb.id}", data={"teaching": "9", "fairness": "8", "professionalism": "7",
@@ -584,32 +616,72 @@ async def test_programmer_can_change_and_delete_a_rating(boss, dev, session, wor
     assert not await session.scalar(select(Feedback.id).where(Feedback.id == fb.id))
 
 
-async def test_viewer_without_names(boss, session, world):
-    """A viewer whose "show who rated" is off sees ratings and comments without student names - also in Excel."""
+async def test_only_programmers_see_who_rated(boss, dev, session, world):
+    """Anonymous: viewers and superadmins see ratings and comments with the group only - also in Excel; programmer
+    accounts see the Telegram account (to find abuse)."""
     from io import BytesIO
     from openpyxl import load_workbook
-    await with_timetable(session)
-    teacher = await session.scalar(select(Teacher).where(Teacher.full_name == "Qodirov RS"))
-    student = Student(hemis_id="99", full_name="Yashirin Talaba", passport_hash=hash_passport("AB1234567"))
-    camp = SurveyCampaign(semester=world["sem"], title="R", opens_at=datetime.now(timezone.utc) - timedelta(days=1),
-                          closes_at=datetime.now(timezone.utc) + timedelta(days=1))
-    session.add_all([student, camp, Feedback(campaign=camp, student=student, teacher=teacher, teaching=8, fairness=8,
-                                             professionalism=8, comment="Zo‘r dars")])
-    await session.commit()
-    viewer = await session.scalar(select(Admin).where(Admin.username == "viewer"))
-    await boss.post(f"/admin/admins/{viewer.id}/edit", data={"role": "viewer", "is_active": "true"})  # switch left off
-    await session.refresh(viewer)
-    assert viewer.show_identity is False
-    c = await client_for("viewer")
+    user, teacher, camp, fb = await rated_by_aziz(session, world)
+    for c in (await client_for("viewer"), boss):
+        for url in ["/admin", "/admin/comments", f"/admin/teachers/{teacher.id}"]:
+            page = (await c.get(url)).text
+            assert "Aziz" not in page and "aziz_k" not in page and "Zo‘r dars" in page and "26-01 IQT" in page, url
+        assert "Zo‘r dars" not in (await c.get("/admin/comments?q=aziz_k")).text   # can't search by who
+        sheet = load_workbook(BytesIO((await c.get("/admin/export/comments.xlsx")).content)).active
+        header = [cell.value for cell in sheet[1]]
+        assert "Telegram ID" not in header and "Kim baholadi" not in header and sheet.max_row == 2
+        assert (await c.get("/admin/users")).status_code == 404
     for url in ["/admin", "/admin/comments", f"/admin/teachers/{teacher.id}"]:
-        page = (await c.get(url)).text
-        assert "Yashirin" not in page and "Zo‘r dars" in page, url
-    assert "Zo‘r dars" not in (await c.get("/admin/comments?q=Yashirin")).text   # can't search by student name
-    sheet = load_workbook(BytesIO((await c.get("/admin/export/comments.xlsx")).content)).active
-    header = [cell.value for cell in sheet[1]]
-    assert "HEMIS" not in header and "Talaba" not in header and sheet.max_row == 2
-    await c.aclose()
-    assert "Yashirin" in (await boss.get("/admin/comments")).text           # superadmins always see names
+        assert "/admin/users/5551234" in (await dev.get(url)).text, url
+    assert "Zo‘r dars" in (await dev.get("/admin/comments?q=aziz_k")).text
+    sheet = load_workbook(BytesIO((await dev.get("/admin/export/comments.xlsx")).content)).active
+    assert [cell.value for cell in sheet[1]][4:6] == ["Kim baholadi", "Telegram ID"]
+    assert [cell.value for cell in sheet[2]][4:6] == ["Aziz Karimov @aziz_k", 5551234]
+
+
+async def test_users_page_block_suspend_warn_and_delete(boss, dev, session, world, monkeypatch):
+    from app.web.admin import users as users_page
+    user, teacher, camp, fb = await rated_by_aziz(session, world)
+    session.add(BotUser(id=-3, is_demo=True))
+    await session.commit()
+    html = (await dev.get("/admin/users")).text
+    assert "Aziz Karimov" in html and "@aziz_k" in html and "Demo #3" not in html   # demo accounts: their own tab
+    assert "Demo #3" in (await dev.get("/admin/users?f=demo")).text
+    assert "Aziz" in (await dev.get("/admin/users?q=5551234")).text
+    assert "Aziz" not in (await dev.get("/admin/users?f=stopped")).text
+
+    async def no_telegram(u):
+        return None
+    monkeypatch.setattr(users_page, "refresh_from_telegram", no_telegram)
+    page = (await dev.get(f"/admin/users/{user.id}")).text
+    assert "Zo‘r dars" in page and "Qodirov RS" in page and "26-01 IQT" in page and "talaba" in page  # bio from getChat
+
+    await dev.post(f"/admin/users/{user.id}/block", data={"blocked": "true", "note": "spam"})
+    await session.refresh(user)
+    assert user.blocked and user.note == "spam"
+    assert "Aziz" in (await dev.get("/admin/users?f=stopped")).text
+    await dev.post(f"/admin/users/{user.id}/block", data={})
+    await dev.post(f"/admin/users/{user.id}/suspend", data={"hours": "24"})
+    await session.refresh(user)
+    assert not user.blocked and user.suspended_until > datetime.now(timezone.utc) + timedelta(hours=23)
+    await dev.post(f"/admin/users/{user.id}/suspend", data={"hours": "0"})
+    await session.refresh(user)
+    assert user.suspended_until is None
+
+    FakeBot.sent = []
+    monkeypatch.setattr(users_page.chatlog, "new_bot", FakeBot)
+    await dev.post(f"/admin/users/{user.id}/warn", data={"text": "Spam qilmang!"})
+    await session.refresh(user)
+    assert FakeBot.sent == [(5551234, "text", "Spam qilmang!")] and user.warnings == 1
+
+    await dev.post(f"/admin/users/{user.id}/group", data={"group": ""})
+    await session.refresh(user)
+    assert user.group_id is None
+    assert (await boss.post(f"/admin/users/{user.id}/delete")).status_code == 404    # programmer accounts only
+    await dev.post(f"/admin/users/{user.id}/ratings/delete", data={"campaign": str(camp.id)})
+    assert not await session.scalar(select(Feedback.id).where(Feedback.user_id == user.id))
+    await dev.post(f"/admin/users/{user.id}/delete")
+    assert await session.get(BotUser, user.id, populate_existing=True) is None
 
 
 async def test_dashboard_online_switch_and_public_address(boss, session):
@@ -650,8 +722,8 @@ async def test_reminders_go_once_at_3_days_and_1_day(session, world):
 async def test_conversations_page_is_for_the_programmer_and_replies_as_the_bot(boss, dev, session, monkeypatch):
     from app.models import BotChat, BotMessage
     from app.web.admin import chats
-    st = Student(hemis_id="7", full_name="Karimov Aziz", passport_hash="x", telegram_id=555)
-    session.add_all([st, BotChat(chat_id=555, name="Aziz", username="aziz_k", last_text="/start", last_dir="in")])
+    session.add_all([BotUser(id=555, first_name="Aziz", username="aziz_k"),
+                     BotChat(chat_id=555, name="Aziz Karimov", username="aziz_k", last_text="/start", last_dir="in")])
     await session.flush()
     session.add_all([
         BotMessage(chat_id=555, message_id=1, dir="in", kind="text", text="/start", reaction="🔥"),
@@ -662,7 +734,8 @@ async def test_conversations_page_is_for_the_programmer_and_replies_as_the_bot(b
     await session.commit()
     assert (await boss.get("/admin/chats")).status_code == 404       # superadmins don't even see that it exists
     page = (await dev.get("/admin/chats?c=555")).text
-    assert "Karimov Aziz" in page and "@aziz_k" in page and "📅 Dars jadvali" in page and "🔥" in page
+    assert "Aziz Karimov" in page and "@aziz_k" in page and "📅 Dars jadvali" in page and "🔥" in page
+    assert 'href="/admin/users/555"' in page                          # the account's page
     assert "<b>Salom</b>" in page and "<script>alert" not in page    # Telegram's formatting only
     assert (await dev.get("/admin/chats?q=Karimov")).text.count('class="chat-item ') == 1
     feed = (await dev.get("/admin/chats/555/feed", params={"v": "x"})).json()
@@ -683,7 +756,7 @@ async def test_display_settings_follow_the_account(boss, session):
     boss_admin = await session.scalar(select(Admin).where(Admin.username == "boss"))
     await session.refresh(boss_admin)
     assert boss_admin.prefs == {"text": 125, "theme": "dark", "contrast": True, "motion": True, "spacing": False,
-                                "links": False, "hide_names": False}
+                                "links": False, "hide_names": False, "group_numbers": False}
     page = (await boss.get("/admin/account")).text
     assert '<html lang="uz" data-text="125" data-theme="dark" data-contrast data-motion>' in page
     await boss.post("/admin/account/display", data={"text": "400", "theme": "pink"})  # not offered: back to normal
@@ -749,19 +822,13 @@ async def test_linking_dashboard_accounts_to_telegram_and_the_admin_mini_app(bos
     assert (await boss.get("/miniapp/admin")).status_code == 200
 
 
-async def test_hiding_who_rated_from_ones_own_panel(boss, session, world):
-    await with_timetable(session)
-    teacher = await session.scalar(select(Teacher).where(Teacher.full_name == "Qodirov RS"))
-    student = Student(hemis_id="9001", full_name="Yashirin Talaba", passport_hash="x")
-    camp = SurveyCampaign(semester=world["sem"], title="R", opens_at=datetime.now(timezone.utc) - timedelta(days=1),
-                          closes_at=datetime.now(timezone.utc) + timedelta(days=1))
-    session.add_all([student, camp, Feedback(campaign=camp, student=student, teacher=teacher, teaching=8, fairness=8,
-                                             professionalism=8, comment="Yaxshi o‘qituvchi")])
-    await session.commit()
-    assert "Yashirin Talaba" in (await boss.get("/admin/comments")).text
-    await boss.post("/admin/account/display", data={"text": "100", "theme": "auto", "hide_names": "true"})
-    page = (await boss.get("/admin/comments")).text
-    assert "Yaxshi o‘qituvchi" in page and "Yashirin Talaba" not in page
-    assert "Yashirin Talaba" not in (await boss.get(f"/admin/teachers/{teacher.id}")).text
-    await boss.post("/admin/account/display", data={"text": "100", "theme": "auto"})
-    assert "Yashirin Talaba" in (await boss.get("/admin/comments")).text
+async def test_hiding_who_rated_from_ones_own_panel(dev, session, world):
+    """A programmer can hide who rated from their own panel, e.g. while showing the screen."""
+    user, teacher, camp, fb = await rated_by_aziz(session, world, comment="Yaxshi o‘qituvchi")
+    assert "Aziz Karimov" in (await dev.get("/admin/comments")).text
+    await dev.post("/admin/account/display", data={"text": "100", "theme": "auto", "hide_names": "true"})
+    page = (await dev.get("/admin/comments")).text
+    assert "Yaxshi o‘qituvchi" in page and "Aziz Karimov" not in page
+    assert "Aziz Karimov" not in (await dev.get(f"/admin/teachers/{teacher.id}")).text
+    await dev.post("/admin/account/display", data={"text": "100", "theme": "auto"})
+    assert "Aziz Karimov" in (await dev.get("/admin/comments")).text

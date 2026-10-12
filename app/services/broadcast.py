@@ -1,7 +1,8 @@
-"""Messages to students through the bot, written in the dashboard (Bot page) and sent in the background.
+"""Messages to the bot's users, written in the dashboard (Bot page) and sent in the background.
 
-Who gets it: everyone, or chosen courses / groups / kafedras (students taught by that kafedra's teachers this
-semester) / specialties - and, while a survey is open, only those who haven't finished it (or only those who have).
+Who gets it: everyone, or - by the group they picked in the bot - chosen courses / groups / kafedras (groups taught by
+that kafedra's teachers this semester) / specialties; and, while a survey is open, only those who haven't finished it
+(or only those who have). Blocked and suspended users get nothing.
 A message can carry a photo, a video or a file; it is uploaded to Telegram once and then reused.
 """
 import asyncio
@@ -12,20 +13,19 @@ from pathlib import Path
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramRetryAfter
 from aiogram.types import FSInputFile, InlineKeyboardMarkup
-from sqlalchemy import and_, distinct, func, select, update
+from sqlalchemy import and_, distinct, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import chatlog
 from app.bot import keyboards as kb
 from app.db import session_scope
-from app.models import Broadcast, Feedback, Group, Semester, Student, Teacher, TeachingAssignment
+from app.models import Broadcast, BotUser, Feedback, Group, Semester, Teacher, TeachingAssignment
 from app.runtime import MEDIA_DIR, webapp_url
-from app.services.students import active_campaign
+from app.services.survey import active_campaign
 
 log = logging.getLogger("broadcast")
 AUDIENCES = ("all", "course", "group", "department", "specialty", "unfinished")  # "unfinished": reminders
 SURVEY_FILTERS = ("", "unfinished", "finished")
-MEDIA_KINDS = ("photo", "video", "document")
 BROADCAST_MEDIA = MEDIA_DIR / "broadcasts"
 CAPTION_LIMIT = 1024  # longer texts go as a second message after the photo/video
 PER_SECOND = 20  # Telegram allows ~30 messages/second; stay well below
@@ -38,27 +38,31 @@ def _ints(values: list[str]) -> list[int]:
 
 async def recipients(session: AsyncSession, audience: str, values: list[str] | str | None = None,
                      survey: str = "") -> list[tuple[int, str]]:
-    """(telegram id, language) of the students in the audience who are logged in to the bot.
+    """(telegram id, language) of the users in the audience.
 
-    survey="unfinished": only students who haven't rated all their teachers in the survey that is open now;
-    "finished": only those who have. (audience "unfinished" = everyone who hasn't finished.)
+    survey="unfinished": only users who haven't finished the survey that is open now - rated all their group's
+    teachers, or (no group picked) anyone at all; "finished": only those who have. (audience "unfinished" = everyone
+    who hasn't finished.)
     """
     values = [values] if isinstance(values, str) else [str(v) for v in values or [] if str(v).strip()]
     if audience == "unfinished":
         audience, survey = "all", "unfinished"
     if audience not in AUDIENCES or (audience != "all" and not values):
         return []
-    q = select(Student.telegram_id, Student.language).where(Student.telegram_id.is_not(None), Student.is_active)
+    now = datetime.now(timezone.utc)
+    q = select(BotUser.id, BotUser.language).where(
+        BotUser.id > 0, BotUser.onboarded_at.is_not(None), BotUser.blocked.is_(False),
+        or_(BotUser.suspended_until.is_(None), BotUser.suspended_until < now))
     if audience == "course":
-        q = q.join(Group, Group.id == Student.group_id).where(Group.course.in_(_ints(values)))
+        q = q.join(Group, Group.id == BotUser.group_id).where(Group.course.in_(_ints(values)))
     elif audience == "group":
-        q = q.where(Student.group_id.in_(_ints(values)))
+        q = q.where(BotUser.group_id.in_(_ints(values)))
     elif audience == "specialty":
-        q = q.join(Group, Group.id == Student.group_id).where(Group.code.in_(values))
+        q = q.join(Group, Group.id == BotUser.group_id).where(Group.code.in_(values))
     elif audience == "department":
         taught = (select(TeachingAssignment.group_id).join(Teacher, Teacher.id == TeachingAssignment.teacher_id)
                   .join(Semester).where(Semester.is_current, Teacher.department_id.in_(_ints(values))))
-        q = q.where(Student.group_id.in_(taught))
+        q = q.where(BotUser.group_id.in_(taught))
     if survey in ("unfinished", "finished"):
         campaign = await active_campaign(session)
         if campaign is None:
@@ -66,10 +70,11 @@ async def recipients(session: AsyncSession, audience: str, values: list[str] | s
         expected = (select(TeachingAssignment.group_id.label("gid"),
                            func.count(distinct(TeachingAssignment.teacher_id)).label("n"))
                     .join(Semester).where(Semester.is_current).group_by(TeachingAssignment.group_id).subquery())
-        rated = (select(Feedback.student_id.label("sid"), func.count(distinct(Feedback.teacher_id)).label("n"))
-                 .where(Feedback.campaign_id == campaign.id).group_by(Feedback.student_id).subquery())
-        q = q.join(expected, expected.c.gid == Student.group_id).outerjoin(rated, rated.c.sid == Student.id)
-        done = func.coalesce(rated.c.n, 0) >= expected.c.n
+        rated = (select(Feedback.user_id.label("uid"), func.count(distinct(Feedback.teacher_id)).label("n"))
+                 .where(Feedback.campaign_id == campaign.id).group_by(Feedback.user_id).subquery())
+        q = q.outerjoin(expected, expected.c.gid == BotUser.group_id).outerjoin(rated, rated.c.uid == BotUser.id)
+        # With a group: all its teachers rated. Without one there is no list to finish: anyone rated counts.
+        done = func.coalesce(rated.c.n, 0) >= func.coalesce(expected.c.n, 1)
         q = q.where(done if survey == "finished" else ~done)
     return [(tid, lang) for tid, lang in (await session.execute(q)).all()]
 

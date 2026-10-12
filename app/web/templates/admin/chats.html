@@ -19,13 +19,12 @@
       <a class="icon-btn chat-back" href="/admin/chats{% if q %}?q={{ q|urlencode }}{% endif %}" aria-label="{{ t('back') }}">{{ icon('chevron_left') }}</a>
       <div class="ch-who">
         <b>{{ chat.title }}</b>
-        {% set parts = [chat.group, ('@' ~ chat.username) if chat.username else '', ('HEMIS ' ~ chat.hemis) if chat.hemis else '',
-                        chat.tg_name if chat.tg_name and chat.tg_name != chat.title else ''] %}
-        <span>{{ parts|select|join(' · ') or t('chat_guest') }}</span>
+        {% set parts = [grp(chat.group), ('@' ~ chat.username) if chat.username else '', 'ID ' ~ chat.id] %}
+        <span>{{ parts|select|join(' · ') }}</span>
       </div>
       {% if chat.blocked %}<span class="state-pill down">{{ t('chat_blocked') }}</span>
-      {% elif chat.linked %}<span class="state-pill ok">{{ t('chat_logged_in') }}</span>
-      {% else %}<span class="state-pill starting">{{ t('chat_not_in') }}</span>{% endif %}
+      {% elif chat.stopped %}<span class="state-pill down">{{ t('us_stopped') }}</span>{% endif %}
+      {% if chat.id > 0 %}<a class="btn sm" href="/admin/users/{{ chat.id }}" data-tip="{{ t('us_open_tip') }}">{{ icon('user') }}{{ t('us_open') }}</a>{% endif %}
     </header>
     <div class="tg-wall chat-wall" id="chat-wall" aria-live="polite">{% include "admin/_chat_messages.html" %}</div>
     <form class="chat-compose" id="chat-compose" action="/admin/chats/{{ chat.id }}/send" method="post" enctype="multipart/form-data"

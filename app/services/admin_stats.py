@@ -6,9 +6,9 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Feedback, Student, SurveyCampaign
+from app.models import Feedback, SurveyCampaign
 from app.runtime import tunnel_status, webapp_url
-from app.services.students import active_campaign
+from app.services.survey import active_campaign
 from app.web.admin import analytics as an
 
 TASHKENT = ZoneInfo("Asia/Tashkent")
@@ -16,7 +16,7 @@ TUNNEL_STALE = 300  # seconds: older than this, the watchdog's "ok" isn't truste
 
 
 def site_state() -> dict:
-    """The public address and whether it works, as scripts/tunnel.sh last checked it."""
+    """The public address and whether it works, as the server (app.server) last checked it."""
     url = webapp_url()
     st = tunnel_status()
     ago = int(datetime.now(timezone.utc).timestamp()) - st["at"] if st["at"] else None
@@ -39,9 +39,8 @@ async def snapshot(session: AsyncSession, detail: bool = False) -> dict:
     now = datetime.now(TASHKENT)
     out = {
         "campaign": None,
-        "students": await session.scalar(select(func.count(Student.id)).where(Student.is_active)),
-        "in_bot": await session.scalar(select(func.count(Student.id)).where(Student.is_active,
-                                                                            Student.telegram_id.is_not(None))),
+        "students": await an.student_total(session),
+        "in_bot": await an.in_bot(session),
         "site": site_state(),
     }
     if campaign is None:

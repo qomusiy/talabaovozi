@@ -24,7 +24,7 @@
 {% set sem_state = 'ok' if h.semester else 'missing' %}
 {% set tt_state = 'missing' if not h.snapshot else ('warn' if settings.timetable_error else 'ok') %}
 {% set teach_state = 'missing' if not h.assignments else ('warn' if h.orphan_groups else 'ok') %}
-{% set st_state = 'missing' if not h.students else ('warn' if h.temporary or h.no_group else 'ok') %}
+{% set st_state = 'missing' if not h.students else ('warn' if h.unsized_groups else 'ok') %}
 
 <nav class="stepper" aria-label="{{ t('nav_data') }}">
   {% for key, st in [('semester', sem_state), ('timetable', tt_state), ('teaching', teach_state), ('students', st_state)] %}
@@ -126,18 +126,14 @@
   {{ upload('/admin/data/teaching', t('up_teaching'), t('up_teaching_hint'), [('teaching', t('template'))]) }}
 </section>
 
-{# ---------- 4. Students ---------- #}
+{# ---------- 4. Group sizes (how many students each group has - no names) ---------- #}
 <section class="card step" id="students">
   <div class="step-h"><span class="n {{ st_state }}">4</span>
     <div><h2>{{ t('step_students') }} {{ state(st_state) }}</h2>
-      <div class="sub">{{ t('students_n', n=num(h.students)) }}</div></div>
-    <div class="acts"><a class="btn sm" href="/admin/students" data-tip="{{ t('tip_students') }}">{{ icon('students') }}{{ t('nav_students') }}</a></div>
+      <div class="sub">{{ t('students_n', n=num(h.students), groups=h.sized_groups) }}</div></div>
+    <div class="acts"><a class="btn sm" href="/admin/records?tab=groups" data-tip="{{ t('tip_students') }}">{{ icon('pencil') }}{{ t('rd_tab_groups') }}</a></div>
   </div>
-  {% if h.temporary %}
-  <div class="flash warn inline">{{ icon('key') }}<span>{{ t('temp_codes_warn', n=num(h.temporary)) }}</span>
-    <a class="link" href="/admin/data/temporary-codes.xlsx" data-tip="{{ t('tip_temp_codes') }}">{{ icon('download') }}{{ t('temp_codes_download') }}</a></div>
-  {% endif %}
-  {% if h.no_group %}<div class="flash warn inline">{{ icon('alert') }}<span>{{ t('no_group_warn', n=h.no_group) }}</span></div>{% endif %}
+  {% if h.unsized_groups %}<div class="flash warn inline">{{ icon('alert') }}<span>{{ t('unsized_warn', n=h.unsized_groups) }}</span></div>{% endif %}
   {% set deactivate %}<label class="check"><input type="checkbox" name="deactivate_missing" value="true">{{ t('deactivate_missing') }}</label>{% endset %}
   {{ upload('/admin/data/students', t('up_students'), t('up_students_hint'), [('students', t('template'))], deactivate) }}
 </section>

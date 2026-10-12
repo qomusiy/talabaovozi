@@ -3,8 +3,10 @@
 Key design decisions (see README for the reasoning):
 - Who teaches whom lives in `teaching_assignments` (teacher + group + subject + semester),
   not in the Teacher table: one teacher teaches many groups and subjects.
-- Feedback is open (linked to the student). A unique (campaign, student, teacher) constraint
-  stops duplicate evaluations. Anonymous feedback may be added later.
+- The survey is anonymous: there is no list of students. Whoever uses the bot is a `bot_users` row (their Telegram
+  account) and picks a group, which decides whose teachers they see. A rating is linked to that account - only
+  programmer accounts can see it, to stop abuse - and a unique (campaign, user, teacher) constraint stops duplicates.
+- How many students a group has is a number on the group (`student_count`), for "X of Y took part".
 """
 from datetime import date, datetime
 
@@ -24,7 +26,6 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-LANGUAGES = ("uz", "en", "ru", "tk")
 LESSON_TYPES = ("lecture", "practice", "lab", "seminar", "other")
 # Survey criteria, each rated 1-10: teaching quality, fair assessment, professionalism & respect for students.
 RATING_CRITERIA = ("teaching", "fairness", "professionalism")
@@ -66,32 +67,53 @@ class Group(TimestampMixin, Base):
     specialty: Mapped[str | None] = mapped_column(String(255))
     language: Mapped[str | None] = mapped_column(String(8))  # language of instruction
     edupage_id: Mapped[str | None] = mapped_column(String(32), unique=True)
+    # How many students study in the group (HEMIS export, or typed in on the Edit data page): "X of Y took part".
+    student_count: Mapped[int | None] = mapped_column(Integer)
+    # The name students know the group by ("302"); the bot shows it instead of `name` once an admin has typed it in.
+    number: Mapped[str | None] = mapped_column(String(16))
 
-    students: Mapped[list["Student"]] = relationship(back_populates="group")
 
+class BotUser(Base):
+    """Someone who uses the bot: their Telegram account. Anonymous to the faculty - only programmer accounts see who
+    rated (Foydalanuvchilar page), to find and stop abuse. Demo data uses negative ids (no real account)."""
 
-class Student(TimestampMixin, Base):
-    __tablename__ = "students"
+    __tablename__ = "bot_users"
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    hemis_id: Mapped[str] = mapped_column(String(32), unique=True)
-    full_name: Mapped[str] = mapped_column(String(255))
-    passport_hash: Mapped[str] = mapped_column(String(64))
-    # True until the real passport code is imported: the code is then derived from the HEMIS id
-    # (app.security.temporary_passport) and shown to admins so they can test.
-    passport_temporary: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)  # the Telegram user id
+    # As Telegram shows the person (refreshed on every message).
+    first_name: Mapped[str | None] = mapped_column(String(128))
+    last_name: Mapped[str | None] = mapped_column(String(128))
+    username: Mapped[str | None] = mapped_column(String(64), index=True)
+    tg_language: Mapped[str | None] = mapped_column(String(16))   # the language of their Telegram app
+    is_premium: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    photo_file_id: Mapped[str | None] = mapped_column(String(255))  # newest profile picture (Telegram file id)
+    # Everything else Telegram told: the user object, the Mini App's user (photo_url), getChat (bio, birthdate, ...).
+    profile: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
+
+    language: Mapped[str] = mapped_column(String(2), default="uz", server_default="uz")  # the bot's language
     group_id: Mapped[int | None] = mapped_column(ForeignKey("groups.id", ondelete="SET NULL"), index=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
-
-    # Filled in when the student logs in through the Telegram bot.
-    telegram_id: Mapped[int | None] = mapped_column(BigInteger, unique=True)
-    language: Mapped[str] = mapped_column(String(2), default="uz", server_default="uz")
-    # When the student joined the bot. (Demo data sets this without a Telegram link.)
-    registered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # The bot's latest "open survey" message; its button is moved along if the survey URL changes.
+    # Finished the introduction: picked a group (accounts from before may have gone on without one).
+    onboarded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updates: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # messages and button taps
+    # The bot's latest home card; its survey button is moved along if the survey URL changes.
     survey_message_id: Mapped[int | None] = mapped_column(BigInteger)
 
-    group: Mapped[Group | None] = relationship(back_populates="students")
+    # Set by a programmer (or the flood guard): the bot and the survey ignore a blocked user, or one suspended until.
+    blocked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    suspended_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    floods: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # times the flood guard stopped them
+    warnings: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # warnings sent from the dashboard
+    note: Mapped[str | None] = mapped_column(Text)  # the programmer's note (why blocked, ...)
+    is_demo: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+
+    group: Mapped[Group | None] = relationship()
+
+    @property
+    def name(self) -> str:
+        return " ".join(x for x in (self.first_name, self.last_name) if x) or (
+            f"Demo #{-self.id}" if self.id < 0 else str(self.id))
 
 
 class Teacher(TimestampMixin, Base):
@@ -167,19 +189,21 @@ class SurveyCampaign(TimestampMixin, Base):
 
 
 class Feedback(TimestampMixin, Base):
-    """A student's rating of one teacher in one survey campaign. One row per (campaign, student, teacher)."""
+    """A rating of one teacher in one survey campaign by one bot user. One row per (campaign, user, teacher)."""
 
     __tablename__ = "feedback"
     __table_args__ = (
-        UniqueConstraint("campaign_id", "student_id", "teacher_id"),
+        UniqueConstraint("campaign_id", "user_id", "teacher_id"),
         *(CheckConstraint(f"{c} BETWEEN 1 AND 10", name=f"{c}_range") for c in RATING_CRITERIA),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     campaign_id: Mapped[int] = mapped_column(ForeignKey("survey_campaigns.id", ondelete="CASCADE"), index=True)
-    student_id: Mapped[int] = mapped_column(ForeignKey("students.id", ondelete="CASCADE"), index=True)
+    # Deleting a user (an attacker) deletes their ratings too.
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("bot_users.id", ondelete="CASCADE"), index=True)
     teacher_id: Mapped[int] = mapped_column(ForeignKey("teachers.id", ondelete="CASCADE"), index=True)
-    # The student's group at the time of submission, so stats stay correct if the student changes group later.
+    # The user's group at the time of submission (None: rated without a group), so stats stay correct if they change
+    # group later.
     group_id: Mapped[int | None] = mapped_column(ForeignKey("groups.id", ondelete="SET NULL"), index=True)
 
     teaching: Mapped[int] = mapped_column(SmallInteger)  # explains the subject clearly, effectively, practically
@@ -188,7 +212,7 @@ class Feedback(TimestampMixin, Base):
     comment: Mapped[str | None] = mapped_column(Text)
 
     campaign: Mapped[SurveyCampaign] = relationship()
-    student: Mapped[Student] = relationship()
+    user: Mapped[BotUser] = relationship()
     teacher: Mapped[Teacher] = relationship()
     group: Mapped[Group | None] = relationship()
 
@@ -208,10 +232,8 @@ class Admin(TimestampMixin, Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(16), default="viewer", server_default="viewer")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
-    # Viewers only: may they see which student gave a rating (names next to ratings and comments)?
-    show_identity: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     # How the dashboard looks to this person (text size, theme, contrast, ...): app.web.admin.display;
-    # also the bot's admin menu switches (tg_notify, tg_daily).
+    # also the bot's admin menu switches (tg_server: server status messages, tg_daily: the daily report).
     prefs: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
     # Telegram: the bot knows this account by its Telegram ID (app.services.admin_link). Linked with a one-time
     # link from "My account", or - the first time - by the @username entered here; the ID is kept after that,
@@ -232,9 +254,9 @@ class Admin(TimestampMixin, Base):
 
     @property
     def sees_identity(self) -> bool:
-        """May this person's pages show which student gave a rating? Not for a viewer whose switch is off, and not
-        for anyone who hid the names from their own panel (Ko‘rinish › "Hide who rated")."""
-        return (self.role != "viewer" or self.show_identity) and not (self.prefs or {}).get("hide_names")
+        """May this person's pages show which Telegram account gave a rating? Programmer accounts only (to find
+        abuse) - unless they hid it from their own panel (Ko‘rinish › "Hide who rated"), e.g. to show the screen."""
+        return self.is_programmer and not (self.prefs or {}).get("hide_names")
 
 
 class AuditLog(Base):
@@ -303,7 +325,7 @@ class AppSetting(Base):
 
 
 class Broadcast(TimestampMixin, Base):
-    """A message sent to students through the bot from the dashboard."""
+    """A message sent to the bot's users from the dashboard."""
 
     __tablename__ = "broadcasts"
 
@@ -332,19 +354,16 @@ class BotChat(Base):
     chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
     name: Mapped[str | None] = mapped_column(String(255))       # as in Telegram
     username: Mapped[str | None] = mapped_column(String(64))
-    student_id: Mapped[int | None] = mapped_column(ForeignKey("students.id", ondelete="SET NULL"))
     first_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     last_text: Mapped[str | None] = mapped_column(String(255))
     last_dir: Mapped[str | None] = mapped_column(String(4))
     blocked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")  # stopped the bot
 
-    student: Mapped[Student | None] = relationship()
-
 
 class BotMessage(Base):
     """One message in a bot conversation, both ways (app.bot.chatlog). Edits change the row, as they change the
-    message in Telegram; a button press is a row of its own ("tap"). Passport numbers are never stored."""
+    message in Telegram; a button press is a row of its own ("tap")."""
 
     __tablename__ = "bot_messages"
 

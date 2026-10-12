@@ -1,7 +1,6 @@
-"""The Windows server program (app.server) and its backups (app.backup)."""
+"""The server program (app.server) and its backups (app.backup)."""
 import asyncio
 import os
-import shutil
 from datetime import datetime
 
 import pytest
@@ -12,8 +11,10 @@ from app.models import Department
 
 
 async def test_backup_and_restore_with_the_apps_own_database_user(session, tmp_path, monkeypatch):
-    if not shutil.which("pg_dump"):
-        pytest.skip("pg_dump is not installed here")
+    try:
+        backup.pg_command("pg_dump")
+    except SystemExit:
+        pytest.skip("no PostgreSQL tools here")
     monkeypatch.setattr(backup, "BACKUPS", tmp_path)
     monkeypatch.setattr(backup, "MEDIA_DIR", tmp_path / "media")
     for day in range(1, 16):  # older copies: only the newest 14 are kept

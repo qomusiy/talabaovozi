@@ -11,7 +11,6 @@ from collections import Counter
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
 from app.faculty import group_code
 from app.models import Department, Teacher
 
@@ -114,10 +113,6 @@ async def fill_missing(session: AsyncSession, data: dict, teachers: dict[str, Te
         missing[tid].department_id = existing[_name_key(name)].id
     await session.flush()
     return len(guesses)
-
-
-def home_faculty() -> str:
-    return get_settings().edupage_faculty
 
 
 async def teacher_counts(session: AsyncSession) -> dict[int, int]:

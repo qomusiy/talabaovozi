@@ -1,5 +1,5 @@
-"""Dashboard pages that run the system: survey rounds, data (semester, timetable, teachers, students),
-the bot (settings, messages to students) and admin accounts. Superadmins only, except "My account"."""
+"""Dashboard pages that run the system: survey rounds, data (semester, timetable, teachers, group sizes),
+the bot (settings, messages to its users) and admin accounts. Superadmins only, except "My account"."""
 import asyncio
 import logging
 import re
@@ -17,20 +17,19 @@ from app import demo, settings_store
 from app.importers import excel
 from app.importers.templates import TEMPLATES, template_xlsx
 from app.config import get_settings
-from app.models import (Admin, Broadcast, Department, Feedback, Group, ImportLog, Semester, Student, SurveyCampaign,
-                        Teacher)
+from app.models import Admin, Broadcast, Department, Feedback, Group, ImportLog, Semester, SurveyCampaign, Teacher
 from app.bot import chatlog
 from app.bot import keyboards as kb
 from app.bot.pictures import BadImage, normalize_photo
 from app.runtime import (MENU_PHOTO_FILE, fixed_address, menu_photo, request_tunnel_restart, tunnel_status,
                          webapp_url)
-from app.security import hash_password, temporary_passport, verify_password
+from app.security import hash_password, verify_password
 from app.services import admin_link, broadcast, teaching
 from app.web.admin import analytics as an
 from app.web.admin import display
 from app.web.admin.i18n import translator
 from app.web.admin.dev import schema as dev_schema
-from app.web.admin.views import TASHKENT, flash, get_lang, render, resolve_campaign, xlsx_response
+from app.web.admin.views import TASHKENT, flash, get_lang, render, resolve_campaign
 from app.web.deps import current_admin, get_session, superadmin
 
 router = APIRouter(prefix="/admin")
@@ -77,8 +76,8 @@ async def read_upload(file: UploadFile) -> BytesIO:
 def report_text(t, report: excel.ImportReport) -> str:
     """'2091 ta qo‘shildi · 3 ta xato — 5-qator: ...' in the dashboard's language."""
     parts = [t(f"imp_{k}", n=v) for k, v in (("created", report.created), ("updated", report.updated),
-                                             ("skipped", report.skipped), ("temporary", report.temporary),
-                                             ("deactivated", report.deactivated), ("errors", len(report.errors)))
+                                             ("skipped", report.skipped), ("deactivated", report.deactivated),
+                                             ("errors", len(report.errors)))
              if v or k in ("created", "updated")]
     details = "; ".join((t("imp_row", row=row) + ": " if row else "") + t(f"imp_{code}", **values)
                         for row, code, values in report.errors[:3])
@@ -100,9 +99,9 @@ async def surveys(request: Request, admin: Admin = Depends(superadmin), session:
     cid, campaigns = await resolve_campaign(session, None)
     now = datetime.now(timezone.utc)
     stats = dict((c, (n, p)) for c, n, p in (await session.execute(
-        select(Feedback.campaign_id, func.count(Feedback.id), func.count(distinct(Feedback.student_id)))
+        select(Feedback.campaign_id, func.count(Feedback.id), func.count(distinct(Feedback.user_id)))
         .group_by(Feedback.campaign_id))).all())
-    students = await session.scalar(select(func.count(Student.id)).where(Student.is_active)) or 0
+    students = await an.student_total(session)
     fmt = "%d.%m.%Y %H:%M"
     rows = []
     for c in campaigns:
@@ -257,7 +256,7 @@ def _404():
     raise HTTPException(404)
 
 
-# ================================================================ Data: semester, timetable, teachers, students
+# ================================================================ Data: semester, timetable, teachers, group sizes
 
 @router.get("/data", response_class=HTMLResponse)
 async def data_page(request: Request, admin: Admin = Depends(superadmin), session: AsyncSession = Depends(get_session, scope="function")):
@@ -285,9 +284,11 @@ def _upload_result(request: Request, report: excel.ImportReport) -> None:
 @router.post("/data/students")
 async def upload_students(request: Request, file: UploadFile = File(...), deactivate_missing: bool = Form(False),
                           admin: Admin = Depends(superadmin), session: AsyncSession = Depends(get_session, scope="function")):
+    """How many students each group has (a HEMIS export: one row per student, counted per group). No names are
+    kept - only the numbers, for "X of Y took part"."""
     try:
-        report = await excel.import_students(session, await read_upload(file), file.filename or "students.xlsx",
-                                             deactivate_missing, admin.username)
+        report = await excel.import_group_sizes(session, await read_upload(file), file.filename or "students.xlsx",
+                                                deactivate_missing, admin.username)
     except excel.ImportFileError as e:
         file_error(request, e)
         return back("/admin/data#students")
@@ -463,30 +464,10 @@ async def template(kind: str, admin: Admin = Depends(superadmin), session: Async
             select(func.coalesce(Teacher.short_name, Teacher.full_name)).where(Teacher.is_active))).scalars() if n}),
         "departments": list((await session.execute(select(Department.name).order_by(Department.name))).scalars()),
     }
-    names = {"students": "talabalar", "teaching": "oqituvchilar_va_biriktirishlar", "timetable": "dars_jadvali"}
+    names = {"students": "guruhlar_talabalar_soni", "teaching": "oqituvchilar_va_biriktirishlar",
+             "timetable": "dars_jadvali"}
     return StreamingResponse(template_xlsx(kind, lists), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                              headers={"Content-Disposition": f'attachment; filename="{names.get(kind, kind)}_namuna.xlsx"'})
-
-
-@router.get("/data/temporary-codes.xlsx")
-async def temporary_codes(request: Request, admin: Admin = Depends(superadmin), session: AsyncSession = Depends(get_session, scope="function")):
-    """Login codes of students who don't have their real passport code imported yet (for testing the bot)."""
-    t = _t(request)
-    rows = (await session.execute(
-        select(Student.hemis_id, Student.full_name, Group.name).outerjoin(Group, Group.id == Student.group_id)
-        .where(Student.is_active, Student.passport_temporary).order_by(Group.name, Student.full_name))).all()
-    return xlsx_response("temporary_codes", ["HEMIS ID", t("col_student"), t("col_group"), t("col_temp_code")],
-                         [(h, n, g, temporary_passport(h)) for h, n, g in rows])
-
-
-@router.post("/students/{sid}/unlink")
-async def student_unlink(request: Request, sid: int, admin: Admin = Depends(superadmin),
-                         session: AsyncSession = Depends(get_session, scope="function")):
-    """Free a student's account from its Telegram link (new phone, or someone else logged in by mistake)."""
-    st = await session.get(Student, sid) or _404()
-    st.telegram_id, st.survey_message_id = None, None
-    flash(request, "good", _t(request)("st_unlinked", name=st.full_name))
-    return back(request.headers.get("referer") or "/admin/students")
 
 
 # ================================================================ Bot
@@ -504,7 +485,7 @@ async def bot_page(request: Request, admin: Admin = Depends(superadmin), session
     cid, campaigns = await resolve_campaign(session, None)
     settings = await settings_store.load(session, fresh=True)
     support, tech = settings_store.contacts(settings)
-    in_bot = await session.scalar(select(func.count(Student.id)).where(Student.is_active, Student.telegram_id.is_not(None)))
+    in_bot = await an.in_bot(session)
     history = list((await session.execute(select(Broadcast).order_by(Broadcast.id.desc()).limit(10))).scalars())
     groups = await an.all_groups(session)
     courses = sorted({g.course for g in groups if g.course})
@@ -530,7 +511,7 @@ def _stamp(path) -> int:
 
 
 def _tunnel_view() -> dict:
-    """The public address as scripts/tunnel.sh last checked it, for the Bot page."""
+    """The public address as the server (app.server) last checked it, for the Bot page."""
     st = tunnel_status()
     ago = int(datetime.now(timezone.utc).timestamp()) - st["at"] if st["at"] else None
     state = st["state"]
@@ -576,28 +557,22 @@ def channel_link(value: str) -> str | None:
 
 
 @router.post("/bot/settings")
-async def bot_settings(request: Request, login_open: bool = Form(False), survey_comments: bool = Form(False),
+async def bot_settings(request: Request, survey_comments: bool = Form(False),
                        survey_edit: bool = Form(False), reminders: bool = Form(False), bot_reactions: bool = Form(False),
                        survey_comment_required: bool = Form(False),
                        survey_notice: str = Form(""), support_contact: str = Form(""), tech_contact: str = Form(""),
-                       admin_telegram_ids: str = Form(""), channel_url: str = Form(""),
+                       channel_url: str = Form(""),
                        admin: Admin = Depends(superadmin), session: AsyncSession = Depends(get_session, scope="function")):
     t = _t(request)
-    ids = []
-    for part in admin_telegram_ids.replace(",", " ").split():
-        if not part.lstrip("-").isdigit():
-            flash(request, "bad", t("bot_err_ids", value=part))
-            return back("/admin/bot")
-        ids.append(int(part))
     channel = channel_link(channel_url)
     if channel is None:
         flash(request, "bad", t("bot_err_channel", value=channel_url.strip()))
         return back("/admin/bot")
-    await settings_store.save(session, login_open=login_open, survey_comments=survey_comments, survey_edit=survey_edit,
+    await settings_store.save(session, survey_comments=survey_comments, survey_edit=survey_edit,
                               reminders=reminders, bot_reactions=bot_reactions, channel_url=channel,
                               survey_comment_required=survey_comment_required,
                               survey_notice=survey_notice.strip()[:500], support_contact=support_contact.strip()[:64],
-                              tech_contact=tech_contact.strip()[:64], admin_telegram_ids=ids)
+                              tech_contact=tech_contact.strip()[:64])
     flash(request, "good", t("bot_saved"))
     return back("/admin/bot")
 
@@ -637,7 +612,7 @@ async def menu_photo_reset(request: Request, admin: Admin = Depends(superadmin))
     return back("/admin/bot#menu-photo")
 
 
-# ---------- Messages to students ----------
+# ---------- Messages to the bot's users ----------
 
 MEDIA_LIMITS = {"photo": 10 * 1024 * 1024, "video": 50 * 1024 * 1024, "document": 50 * 1024 * 1024}
 PHOTO_TYPES = {"image/jpeg", "image/png", "image/webp"}
@@ -721,9 +696,9 @@ async def send_broadcast(request: Request, text: str = Form(""), audience: str =
 async def test_broadcast(request: Request, text: str = Form(""), survey_button: bool = Form(False),
                          media: UploadFile | None = File(None), admin: Admin = Depends(superadmin),
                          session: AsyncSession = Depends(get_session, scope="function")):
-    """Send the message only to the admins' own Telegram (the ids in the settings), to see it before everyone."""
+    """Send the message only to this admin's own Telegram (linked on "My account"), to see it before everyone."""
     t = _t(request)
-    ids = [admin.telegram_id] if admin.telegram_id else (await settings_store.load(session, fresh=True))["admin_telegram_ids"]
+    ids = [admin.telegram_id] if admin.telegram_id else []
     if not ids:
         return JSONResponse({"ok": False, "error": t("bc_test_no_ids")})
     text = text.strip()[:3500]
@@ -813,7 +788,7 @@ async def telegram_username_error(session: AsyncSession, t, value: str, owner_id
 
 @router.post("/admins/new")
 async def admin_create(request: Request, username: str = Form(...), password: str = Form(...),
-                       role: str = Form("viewer"), show_identity: bool = Form(False), telegram_username: str = Form(""),
+                       role: str = Form("viewer"), telegram_username: str = Form(""),
                        admin: Admin = Depends(superadmin), session: AsyncSession = Depends(get_session, scope="function")):
     t = _t(request)
     username = username.strip()
@@ -826,14 +801,14 @@ async def admin_create(request: Request, username: str = Form(...), password: st
         flash(request, "bad", t("adm_err_exists", name=username))
     else:
         session.add(Admin(username=username[:64], password_hash=hash_password(password), role=role,
-                          show_identity=show_identity, telegram_username=tg_name))
+                          telegram_username=tg_name))
         flash(request, "good", t("adm_created", name=username))
     return back("/admin/admins")
 
 
 @router.post("/admins/{aid}/edit")
 async def admin_edit(request: Request, aid: int, role: str = Form(""), is_active: bool = Form(False),
-                     show_identity: bool = Form(False), password: str = Form(""), telegram_username: str = Form(""),
+                     password: str = Form(""), telegram_username: str = Form(""),
                      tg_unlink: bool = Form(False), admin: Admin = Depends(superadmin),
                      session: AsyncSession = Depends(get_session, scope="function")):
     t = _t(request)
@@ -853,7 +828,7 @@ async def admin_edit(request: Request, aid: int, role: str = Form(""), is_active
     if password and len(password) < 8:
         flash(request, "bad", t("adm_err_input"))
         return back("/admin/admins")
-    other.role, other.is_active, other.show_identity = role, is_active, show_identity
+    other.role, other.is_active = role, is_active
     if password:
         other.password_hash = hash_password(password)
     flash(request, "good", t("saved"))

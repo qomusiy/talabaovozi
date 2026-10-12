@@ -1,20 +1,20 @@
-"""Tahrirlash: correct the data by hand - teachers (kafedra, name, position), kafedras, groups and students.
+"""Tahrirlash: correct the data by hand - teachers (kafedra, name, position), kafedras and groups (with how many
+students each has); programmer accounts also ratings.
 
 The timetable and the Excel uploads stay the main source; this page is for fixing mistakes. What the next timetable
-sync would overwrite is not editable here (a timetable group's name). Teachers and students who already have
-evaluations can't be deleted, only switched off, so survey results stay complete.
+sync would overwrite is not editable here (a timetable group's name). Teachers who already have evaluations can't
+be deleted, only switched off, so survey results stay complete.
 """
 import math
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.faculty import display_code, group_key
-from app.models import RATING_CRITERIA, Admin, Department, Feedback, Group, Student, SurveyCampaign, Teacher
-from app.security import hash_passport, is_valid_passport, normalize_hemis, normalize_passport, temporary_passport
+from app.models import RATING_CRITERIA, Admin, BotUser, Department, Feedback, Group, SurveyCampaign, Teacher
 from app.services import departments as kafedras
 from app.services.teaching import guess_departments
 from app.web.admin import analytics as an
@@ -23,7 +23,7 @@ from app.web.admin.views import department_groups, flash, get_lang, render, reso
 from app.web.deps import get_session, programmer, superadmin
 
 router = APIRouter(prefix="/admin/records")
-TABS = ("teachers", "departments", "groups", "students", "feedback")  # feedback: programmer accounts only
+TABS = ("teachers", "departments", "groups", "feedback")  # feedback: programmer accounts only
 GROUP_LANGS = ("uz", "ru", "en")
 PER_PAGE = 50
 
@@ -62,7 +62,6 @@ async def records(request: Request, tab: str = "teachers", q: str = "", group: s
         "teachers": await session.scalar(select(func.count(Teacher.id))),
         "departments": len(depts),
         "groups": await session.scalar(select(func.count(Group.id))),
-        "students": await session.scalar(select(func.count(Student.id))),
     }
     # This page with its filters (and without ?edit=), to come back to after saving.
     params = {"tab": tab, **({"q": q} if q else {}), **({"group": group} if group else {}),
@@ -76,9 +75,8 @@ async def records(request: Request, tab: str = "teachers", q: str = "", group: s
     if tab == "feedback":
         ctx |= await _feedback_rows(session, q, _id(campaign), max(1, _id(page) or 1))
         ctx["campaigns_all"] = campaigns
-        if not admin.sees_identity:  # names hidden from this panel (Ko‘rinish): found, but shown as "Talaba"
-            ctx["rows"] = [{**r, "student": t("anon_student"), "hemis": None,
-                            "label": f"{t('anon_student')} → {r['teacher']}"} for r in ctx["rows"]]
+        if not admin.sees_identity:  # hidden from this panel (Ko‘rinish): found, but shown without who rated
+            ctx["rows"] = [{**r, "who": None, "user_id": None, "label": r["teacher"]} for r in ctx["rows"]]
             ctx["names_hidden"] = True
     elif tab == "teachers":
         n = await _feedback_counts(session, Feedback.teacher_id)
@@ -94,55 +92,36 @@ async def records(request: Request, tab: str = "teachers", q: str = "", group: s
         ctx["faculties"] = sorted({*kafedras.KAFEDRAS.values(), *(d.faculty for d in depts if d.faculty)})
         ctx["missing"] = await session.scalar(select(func.count(Teacher.id)).where(
             Teacher.is_active, Teacher.department_id.is_(None)))
-    elif tab == "groups":
-        rows = (await session.execute(
-            select(Group, func.count(Student.id)).outerjoin(Student, and_(Student.group_id == Group.id, Student.is_active))
-            .group_by(Group.id).order_by(Group.name))).all()
-        ctx["rows"] = [{"id": g.id, "name": g.name, "code": g.code, "course": g.course or "", "language": g.language or "",
-                        "edupage": bool(g.edupage_id), "students": n} for g, n in rows]
     else:
-        page_n = max(1, _id(page) or 1)
-        group_id = _id(group)
-        query = select(Student, Group.name).outerjoin(Group, Group.id == Student.group_id)
-        if q.strip():
-            like = f"%{q.strip()}%"
-            query = query.where(or_(Student.full_name.ilike(like), Student.hemis_id.ilike(like)))
-        if group_id:
-            query = query.where(Student.group_id == group_id)
-        total = await session.scalar(select(func.count()).select_from(query.subquery()))
-        found = (await session.execute(query.order_by(Student.is_active.desc(), Group.name, Student.full_name)
-                                       .offset((page_n - 1) * PER_PAGE).limit(PER_PAGE))).all()
-        n = dict((await session.execute(
-            select(Feedback.student_id, func.count(Feedback.id))
-            .where(Feedback.student_id.in_([s.id for s, _ in found])).group_by(Feedback.student_id))).all())
-        ctx |= {"rows": [{"id": s.id, "full_name": s.full_name, "hemis_id": s.hemis_id, "group_id": s.group_id or "",
-                          "group": g, "active": s.is_active, "temporary": s.passport_temporary,
-                          "temp_code": temporary_passport(s.hemis_id) if s.passport_temporary else None,
-                          "in_bot": s.telegram_id is not None, "n": n.get(s.id, 0)} for s, g in found],
-                "total": total, "page": page_n, "pages": max(1, math.ceil(total / PER_PAGE)), "group_id": group_id,
-                "groups": await an.all_groups(session)}
+        users = dict((await session.execute(select(BotUser.group_id, func.count()).where(BotUser.group_id.is_not(None))
+                                            .group_by(BotUser.group_id))).all())
+        n = await _feedback_counts(session, Feedback.group_id)
+        groups = (await session.execute(select(Group).order_by(Group.name))).scalars()
+        ctx["rows"] = [{"id": g.id, "name": g.name, "number": g.number or "", "code": g.code, "course": g.course or "",
+                        "language": g.language or "", "edupage": bool(g.edupage_id), "students": g.student_count or "",
+                        "users": users.get(g.id, 0), "n": n.get(g.id, 0)} for g in groups]
     return await render(request, "admin/records.html", admin, (cid, campaigns), **ctx)
 
 
 async def _feedback_rows(session: AsyncSession, q: str, campaign_id: int | None, page_n: int) -> dict:
-    """Ratings for the programmer's "Baholar" tab: find a student's ratings (name, HEMIS) or a teacher's."""
-    query = (select(Feedback, Student.full_name, Student.hemis_id, Teacher.full_name, Group.name, SurveyCampaign.title)
-             .join(Student, Student.id == Feedback.student_id).join(Teacher, Teacher.id == Feedback.teacher_id)
+    """Ratings for the programmer's "Baholar" tab: find an account's ratings (name, @username, Telegram id) or a
+    teacher's."""
+    query = (select(Feedback, an.WHO, Teacher.full_name, Group.name, SurveyCampaign.title)
+             .join(BotUser, BotUser.id == Feedback.user_id).join(Teacher, Teacher.id == Feedback.teacher_id)
              .join(SurveyCampaign, SurveyCampaign.id == Feedback.campaign_id)
              .outerjoin(Group, Group.id == Feedback.group_id))
     if q.strip():
-        like = f"%{q.strip()}%"
-        query = query.where(or_(Student.full_name.ilike(like), Student.hemis_id.ilike(like), Teacher.full_name.ilike(like)))
+        query = query.where(or_(an.who_search(q), Teacher.full_name.ilike(f"%{q.strip()}%")))
     if campaign_id:
         query = query.where(Feedback.campaign_id == campaign_id)
     total = await session.scalar(select(func.count()).select_from(query.subquery()))
     found = (await session.execute(query.order_by(Feedback.created_at.desc()).offset((page_n - 1) * PER_PAGE)
                                    .limit(PER_PAGE))).all()
-    rows = [{"id": f.id, "label": f"{student} → {teacher}", "student": student, "hemis": hemis, "teacher": teacher,
-             "group": group, "survey": survey, "date": f.created_at, "comment": f.comment or "",
+    rows = [{"id": f.id, "label": f"{who or f.user_id} → {teacher}", "who": who or str(f.user_id), "user_id": f.user_id,
+             "teacher": teacher, "group": group, "survey": survey, "date": f.created_at, "comment": f.comment or "",
              **{k: getattr(f, k) for k in RATING_CRITERIA},
              "overall": round(sum(getattr(f, k) for k in RATING_CRITERIA) / 3, 2)}
-            for f, student, hemis, teacher, group, survey in found]
+            for f, who, teacher, group, survey in found]
     return {"rows": rows, "total": total, "page": page_n, "pages": max(1, math.ceil(total / PER_PAGE)),
             "campaign_id": campaign_id}
 
@@ -151,7 +130,7 @@ async def _feedback_rows(session: AsyncSession, q: str, campaign_id: int | None,
 async def feedback_edit(request: Request, fid: int, teaching: str = Form(""), fairness: str = Form(""),
                         professionalism: str = Form(""), comment: str = Form(""), next: str = Form(""),
                         admin: Admin = Depends(programmer), session: AsyncSession = Depends(get_session, scope="function")):
-    """A student asked to change a rating: the programmer can (the change is in the activity log)."""
+    """A rating to correct (asked for, or abuse): the programmer can (the change is in the activity log)."""
     t = _t(request)
     fb = await session.get(Feedback, fid) or _404()
     scores = {k: _id(v) for k, v in (("teaching", teaching), ("fairness", fairness), ("professionalism", professionalism))}
@@ -274,13 +253,23 @@ async def departments_guess(request: Request, next: str = Form(""), admin: Admin
 
 @router.post("/groups/{gid}")
 @router.post("/groups/new")
-async def group_save(request: Request, gid: int | None = None, name: str = Form(""), course: str = Form(""),
-                     language: str = Form(""), next: str = Form(""), admin: Admin = Depends(superadmin),
-                     session: AsyncSession = Depends(get_session, scope="function")):
+async def group_save(request: Request, gid: int | None = None, name: str = Form(""), number: str = Form(""),
+                     course: str = Form(""), language: str = Form(""), students: str = Form(""), next: str = Form(""),
+                     admin: Admin = Depends(superadmin), session: AsyncSession = Depends(get_session, scope="function")):
     t = _t(request)
     group = (await session.get(Group, gid) or _404()) if gid else Group()
-    if group.edupage_id:  # name, course and language come from the timetable and would come back with the next sync
-        flash(request, "info", t("rd_group_locked"))
+    size = _id(students)
+    if students.strip() and (size is None or size > 1000):
+        flash(request, "bad", t("rd_err_students"))
+        return back(next, "groups")
+    number = " ".join(number.split())[:16] or None
+    if number and await session.scalar(select(Group.name).where(func.lower(Group.number) == number.lower(),
+                                                                Group.id != (gid or 0))):
+        flash(request, "bad", t("rd_err_number", number=number))
+        return back(next, "groups")
+    if group.edupage_id:  # name, course and language come from the timetable: the number and size change here
+        group.student_count, group.number = size or None, number
+        flash(request, "good", t("rd_saved", name=group.name))
         return back(next, "groups")
     name = " ".join(name.split())[:64]
     if not name:
@@ -297,6 +286,7 @@ async def group_save(request: Request, gid: int | None = None, name: str = Form(
     group.name, group.key, group.code = name, key, display_code(name)
     group.course = c if c and 1 <= c <= 6 else None
     group.language = language if language in GROUP_LANGS else None
+    group.student_count, group.number = size or None, number
     session.add(group)
     flash(request, "good", t("rd_saved" if gid else "rd_created", name=name))
     return back(next, "groups")
@@ -307,70 +297,9 @@ async def group_delete(request: Request, gid: int, next: str = Form(""), admin: 
                        session: AsyncSession = Depends(get_session, scope="function")):
     t = _t(request)
     group = await session.get(Group, gid) or _404()
-    if n := await session.scalar(select(func.count(Student.id)).where(Student.group_id == gid)):
-        flash(request, "bad", t("rd_err_group_students", n=n))
+    if n := await session.scalar(select(func.count(Feedback.id)).where(Feedback.group_id == gid)):
+        flash(request, "bad", t("rd_err_group_feedback", n=n))
     else:
         await session.execute(delete(Group).where(Group.id == gid))
         flash(request, "good", t("rd_deleted", name=group.name))
     return back(next, "groups")
-
-
-# ---------------------------------------------------------------- Students
-
-async def _save_student(request, session, student: Student, full_name: str, hemis_id: str, group: str,
-                        passport: str) -> bool:
-    t = _t(request)
-    name, hemis = " ".join(full_name.split())[:255], normalize_hemis(hemis_id)[:32]
-    code = normalize_passport(passport) if passport.strip() else None
-    if not name or not hemis:
-        flash(request, "bad", t("rd_err_student"))
-        return False
-    if await session.scalar(select(Student.id).where(Student.hemis_id == hemis, Student.id != (student.id or 0))):
-        flash(request, "bad", t("rd_err_hemis", hemis=hemis))
-        return False
-    if code and not is_valid_passport(code):
-        flash(request, "bad", t("rd_err_passport"))
-        return False
-    group_id = _id(group)
-    student.full_name, student.hemis_id = name, hemis
-    student.group_id = group_id if group_id and await session.get(Group, group_id) else None
-    if code:
-        student.passport_hash, student.passport_temporary = hash_passport(code), False
-    elif not student.passport_hash or student.passport_temporary:  # no real code yet: the stand-in follows the HEMIS id
-        student.passport_hash, student.passport_temporary = hash_passport(temporary_passport(hemis)), True
-    return True
-
-
-@router.post("/students/new")
-async def student_new(request: Request, full_name: str = Form(""), hemis_id: str = Form(""), group: str = Form(""),
-                      passport: str = Form(""), next: str = Form(""), admin: Admin = Depends(superadmin),
-                      session: AsyncSession = Depends(get_session, scope="function")):
-    student = Student(is_active=True)
-    if await _save_student(request, session, student, full_name, hemis_id, group, passport):
-        session.add(student)
-        flash(request, "good", _t(request)("rd_created", name=student.full_name))
-    return back(next, "students")
-
-
-@router.post("/students/{sid}")
-async def student_edit(request: Request, sid: int, full_name: str = Form(""), hemis_id: str = Form(""),
-                       group: str = Form(""), passport: str = Form(""), active: bool = Form(False), next: str = Form(""),
-                       admin: Admin = Depends(superadmin), session: AsyncSession = Depends(get_session, scope="function")):
-    student = await session.get(Student, sid) or _404()
-    if await _save_student(request, session, student, full_name, hemis_id, group, passport):
-        student.is_active = active
-        flash(request, "good", _t(request)("rd_saved", name=student.full_name))
-    return back(next, "students")
-
-
-@router.post("/students/{sid}/delete")
-async def student_delete(request: Request, sid: int, next: str = Form(""), admin: Admin = Depends(superadmin),
-                         session: AsyncSession = Depends(get_session, scope="function")):
-    t = _t(request)
-    student = await session.get(Student, sid) or _404()
-    if n := await session.scalar(select(func.count(Feedback.id)).where(Feedback.student_id == sid)):
-        flash(request, "bad", t("rd_err_student_feedback", n=n))
-    else:
-        await session.execute(delete(Student).where(Student.id == sid))
-        flash(request, "good", t("rd_deleted", name=student.full_name))
-    return back(next, "students")

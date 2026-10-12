@@ -13,13 +13,12 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from markupsafe import Markup
 from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
 
 from app.bot import chatlog
 from app.bot.pictures import BadImage, normalize_photo
-from app.models import Admin, BotChat, BotMessage, Group, Student
+from app.models import Admin, BotChat, BotMessage, BotUser, Group
 from app.runtime import ROOT
-from app.web.admin.views import TASHKENT, get_lang, render, resolve_campaign
+from app.web.admin.views import TASHKENT, get_lang, group_namer, render, resolve_campaign
 from app.web.admin.i18n import translator
 from app.web.deps import get_session, programmer
 from app.web.templating import templates
@@ -34,25 +33,20 @@ TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": 
 # ---------------------------------------------------------------- reading
 
 async def chat_list(session: AsyncSession, q: str = "") -> list[dict]:
-    """The student linked to a chat now, else the one who used it before (logged out since)."""
-    now, before = aliased(Student), aliased(Student)
-    group_now, group_before = aliased(Group), aliased(Group)
-    stmt = (select(BotChat, now.full_name, now.hemis_id, group_now.name, before.full_name, group_before.name)
-            .outerjoin(now, now.telegram_id == BotChat.chat_id)
-            .outerjoin(group_now, group_now.id == now.group_id)
-            .outerjoin(before, before.id == BotChat.student_id)
-            .outerjoin(group_before, group_before.id == before.group_id)
+    """Conversations, newest first, with the group the person picked in the bot."""
+    stmt = (select(BotChat, Group.name, BotUser.blocked, BotUser.suspended_until)
+            .outerjoin(BotUser, BotUser.id == BotChat.chat_id).outerjoin(Group, Group.id == BotUser.group_id)
             .order_by(BotChat.last_at.desc()).limit(LISTED))
     if q := q.strip():
-        like = f"%{q}%"
-        stmt = stmt.where(or_(BotChat.name.ilike(like), BotChat.username.ilike(like.lstrip("@")),
-                              now.full_name.ilike(like), now.hemis_id.ilike(like), group_now.name.ilike(like),
-                              before.full_name.ilike(like), cast(BotChat.chat_id, String).ilike(like)))
+        like = f"%{q.lstrip('@')}%"
+        stmt = stmt.where(or_(BotChat.name.ilike(like), BotChat.username.ilike(like), Group.name.ilike(like),
+                              cast(BotChat.chat_id, String).ilike(like)))
     rows = []
-    for chat, name, hemis, group, old_name, old_group in (await session.execute(stmt)).all():
-        rows.append({"id": chat.chat_id, "title": name or old_name or chat.name or str(chat.chat_id),
-                     "group": group or old_group, "username": chat.username, "tg_name": chat.name, "hemis": hemis,
-                     "linked": name is not None, "was_student": name is None and old_name is not None,
+    now = datetime.now().astimezone()
+    for chat, group, banned, until in (await session.execute(stmt)).all():
+        rows.append({"id": chat.chat_id, "title": chat.name or str(chat.chat_id), "group": group,
+                     "username": chat.username, "tg_name": chat.name,
+                     "stopped": bool(banned) or bool(until and until > now),
                      "blocked": chat.blocked, "last_text": chat.last_text or "", "last_dir": chat.last_dir,
                      "last_at": chat.last_at})
     return rows
@@ -164,7 +158,8 @@ async def chat_list_feed(request: Request, v: str = "", q: str = "", c: int | No
         return JSONResponse({"v": version})
     t = translator(get_lang(request))
     html = _partial(request, "admin/_chat_list.html", {"people": await chat_list(session, q), "chat": {"id": c},
-                                                        "t": t, "q": q, "when": when_label(t)})
+                                                        "t": t, "q": q, "when": when_label(t),
+                                                        "grp": await group_namer(request, admin)})
     return JSONResponse({"v": version, "html": html})
 
 

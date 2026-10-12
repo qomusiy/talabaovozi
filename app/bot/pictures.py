@@ -1,4 +1,4 @@
-"""Pictures the bot sends: a group's week as one clean image, and the demo banner of the menu card.
+"""Pictures the bot sends: a group's week as one clean image.
 
 Drawn with Pillow at twice the size and scaled down, so text and rounded corners stay smooth after Telegram
 compresses the photo. Portrait and one column: it reads on a phone without zooming sideways.
@@ -8,19 +8,15 @@ from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 
-import math
-
-from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont, features
+from PIL import Image, ImageColor, ImageDraw, ImageFont, features
 
 FONTS = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 X = 2                 # drawn at 2x, saved at 1x
-WIDTH = 1080
 WEIGHTS = {"regular": 400, "medium": 500, "semibold": 600, "bold": 700, "extrabold": 800}
 
 # The dashboard's palette (admin.css), so a lesson type has the same colour everywhere.
 INK, INK2, MUTED, FAINT = "#111113", "#46464d", "#6b6b73", "#a0a0a8"
-BG, CARD, BORDER, LINE = "#f3f3f5", "#ffffff", "#e6e6ea", "#efeff2"
-ACCENT, ACCENT_SOFT = "#5b5bd6", "#eef0fe"
+BORDER = "#e6e6ea"
 TYPE_COLORS = {"lecture": "#5b5bd6", "practice": "#1d9bd1", "seminar": "#d9488b", "lab": "#e0961a", "other": "#8e8e96"}
 TYPE_ORDER = ("lecture", "practice", "seminar", "lab", "other")
 
@@ -92,28 +88,6 @@ class Canvas:
         return out.getvalue()
 
 
-def _gradient(width: int, height: int, top: str, bottom: str, glows=()) -> Image.Image:
-    """Top-to-bottom gradient with soft light circles: glows = ((x, y, r, alpha), ...) in 1x pixels."""
-    a = Image.new("RGB", (1, 2))
-    a.putpixel((0, 0), ImageColor.getrgb(top))
-    a.putpixel((0, 1), ImageColor.getrgb(bottom))
-    img = a.resize((width, height), Image.BILINEAR).convert("RGBA")
-    layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    d = ImageDraw.Draw(layer)
-    for x, y, r, alpha in glows:
-        d.ellipse(((x - r) * X, (y - r) * X, (x + r) * X, (y + r) * X), fill=(255, 255, 255, alpha))
-    return Image.alpha_composite(img, layer).convert("RGB")
-
-
-def star(c: "Canvas", cx: float, cy: float, r: float, fill: str) -> None:
-    points = []
-    for i in range(10):
-        radius = r if i % 2 == 0 else r * 0.45
-        angle = math.pi / 2 + i * math.pi / 5
-        points.append(((cx + radius * math.cos(angle)) * X, (cy - radius * math.sin(angle)) * X))
-    c.d.polygon(points, fill=fill)
-
-
 # ================================================================ Timetable
 
 def _mix(color: str, pct: float, base: str = "#ffffff") -> str:
@@ -122,7 +96,7 @@ def _mix(color: str, pct: float, base: str = "#ffffff") -> str:
     return "#" + "".join(f"{round(x * pct + y * (1 - pct)):02x}" for x, y in zip(a, b))
 
 
-SURFACE2, TODAY_EMPTY, DARK = "#f6f6f8", "#f3f3fe", "#111113"
+SURFACE2 = "#f6f6f8"
 
 
 @dataclass
@@ -142,9 +116,10 @@ def timetable_png(*, group: str, about: str, days: list[dict], rows: list[dict],
                   out_width: int = 2400) -> bytes:
     """The week as the dashboard draws it: days across, periods down, each lesson a tinted card.
 
-    days: [{"name", "today", "count"}]; rows: [{"n", "start", "end", "cells": [[lesson]], "lunch": "12:20–13:00" | None}],
-    lesson: {"subject", "type", "week", "room", "teachers"}; labels: {"title", "today", "lunch", "week_A", "week_B",
-    "room", "type_<kind>"}."""
+    The whole week, no day marked as today: students save it and look at it every day.
+    days: [{"name", "count"}]; rows: [{"n", "start", "end", "cells": [[lesson]], "lunch": "12:20–13:00" | None}],
+    lesson: {"subject", "type", "week", "room", "teachers"}; labels: {"title", "lunch", "week_A", "week_B", "room",
+    "type_<kind>"}."""
     width, pad, gap, time_w = 1600, 32, 8, 84
     col_w = (width - 2 * pad - time_w - gap * len(days)) / len(days)
     inner = col_w - 2 - 14 - 10          # card text width (border, left bar + padding, right padding)
@@ -189,18 +164,13 @@ def timetable_png(*, group: str, about: str, days: list[dict], rows: list[dict],
         c.box(x, pad + 34, x + 11, pad + 45, TYPE_COLORS[k], radius=2)
         x -= 18
 
-    # ---- Day headers (today: black, as on the site)
+    # ---- Day headers
     y = pad + head_h
     cols = [pad + time_w + gap + i * (col_w + gap) for i in range(len(days))]
     for d, x0 in zip(days, cols):
-        dark = d["today"]
-        c.box(x0, y, x0 + col_w, y + day_h, DARK if dark else SURFACE2, radius=10, outline=None if dark else BORDER)
-        c.text(x0 + 14, y + 12, d["name"], font(17, "semibold"), "#ffffff" if dark else INK)
-        tx = x0 + 14
-        if dark:
-            w = c.pill(tx, y + 37, labels["today"].upper(), font(10, "semibold"), "#ffffff", "#3a3a40", pad=7, h=18)
-            tx += w + 8
-        c.text(tx, y + 46, d["count"], font(13, "medium"), "#d4d4d8" if dark else MUTED, anchor="lm")
+        c.box(x0, y, x0 + col_w, y + day_h, SURFACE2, radius=10, outline=BORDER)
+        c.text(x0 + 14, y + 12, d["name"], font(17, "semibold"), INK)
+        c.text(x0 + 14, y + 46, d["count"], font(13, "medium"), MUTED, anchor="lm")
     y += day_h + gap
 
     # ---- Periods
@@ -208,9 +178,9 @@ def timetable_png(*, group: str, about: str, days: list[dict], rows: list[dict],
         c.text(pad + 6, y + 14, str(r["n"]), font(19, "bold"), INK)
         c.text(pad + 6, y + 42, r["start"], font(14, "medium"), MUTED)
         c.text(pad + 6, y + 61, r["end"], font(14, "medium"), MUTED)
-        for d, x0, cards in zip(days, cols, cells):
+        for x0, cards in zip(cols, cells):
             if not cards:
-                c.box(x0, y, x0 + col_w, y + h, TODAY_EMPTY if d["today"] else SURFACE2, radius=10)
+                c.box(x0, y, x0 + col_w, y + h, SURFACE2, radius=10)
                 continue
             cy = y
             for card in cards:
@@ -247,52 +217,6 @@ def timetable_png(*, group: str, about: str, days: list[dict], rows: list[dict],
 
     c.text(width / 2, y + foot_h / 2 - 4, footer, font(14, "medium"), FAINT, anchor="mm")
     return c.png(out_width)
-
-
-# ================================================================ Menu banner (demo)
-
-def banner_jpg(title: str = "Talaba Ovozi", subtitle: str = "Iqtisodiyot fakulteti",
-               tagline: str = "O‘qituvchilarni baholash platformasi") -> bytes:
-    """The picture on top of the bot's menu card until the faculty uploads its own (dashboard › Telegram bot)."""
-    w, h = 1280, 640
-    c = Canvas(w, h, "#2c2c96")
-    c.img.paste(_gradient(w * X, h * X, "#6a5cff", "#23238a",
-                          glows=((1120, 90, 300, 30), (1010, 610, 220, 22), (90, 560, 180, 14))))
-    layer = Image.new("RGBA", c.img.size, (0, 0, 0, 0))
-    g = ImageDraw.Draw(layer)
-    for i in range(14):  # a quiet dotted grid on the left
-        for j in range(6):
-            x, y = 70 + i * 34, 70 + j * 34
-            g.ellipse(((x - 2) * X, (y - 2) * X, (x + 2) * X, (y + 2) * X), fill=(255, 255, 255, 34))
-    c.img.paste(layer, (0, 0), layer)
-
-    # Rating card on the right: three criteria with filled bars, like the survey itself.
-    cx0, cy0, cx1, cy1 = 790, 150, 1180, 500
-    shadow = Image.new("RGBA", c.img.size, (0, 0, 0, 0))
-    ImageDraw.Draw(shadow).rounded_rectangle(((cx0 + 8) * X, (cy0 + 18) * X, (cx1 + 8) * X, (cy1 + 18) * X),
-                                             radius=34 * X, fill=(10, 10, 60, 90))
-    shadow = shadow.filter(ImageFilter.GaussianBlur(18 * X))
-    c.img.paste(shadow, (0, 0), shadow)
-    c.box(cx0, cy0, cx1, cy1, "#ffffff", radius=34)
-    for k in range(5):
-        star(c, cx0 + 52 + k * 42, cy0 + 56, 17, "#f5a524")
-    c.text(cx0 + 34, cy0 + 96, "9.4", font(54, "extrabold", "Manrope"), INK)
-    c.text(cx0 + 34 + _w("9.4", font(54, "extrabold", "Manrope")) + 12, cy0 + 122, "/ 10", font(26, "semibold"), MUTED)
-    for k, (label, value, color) in enumerate((("O‘qitish", .94, "#5b5bd6"), ("Adolat", .88, "#1d9bd1"),
-                                               ("Kasbiylik", .97, "#d9488b"))):
-        y = cy0 + 196 + k * 50
-        c.text(cx0 + 34, y, label, font(22, "semibold"), INK2)
-        c.box(cx0 + 160, y + 6, cx1 - 34, y + 20, "#efeff4", radius=7)
-        c.box(cx0 + 160, y + 6, cx0 + 160 + (cx1 - 34 - cx0 - 160) * value, y + 20, color, radius=7)
-
-    c.pill(80, 168, subtitle.upper(), font(22, "bold"), "#ffffff", "#7b6dff", pad=18, h=44)
-    c.text(78, 236, title, font(96, "extrabold", "Manrope"), "#ffffff")
-    c.text(82, 370, tagline, font(32, "medium"), "#dcdcff")
-    c.text(82, 430, "Fikringiz — sifat kafolati", font(28, "semibold", "Manrope"), "#b9b6ff")
-
-    out = BytesIO()
-    c.img.resize((w, h), Image.LANCZOS).save(out, "JPEG", quality=92, optimize=True)
-    return out.getvalue()
 
 
 class BadImage(ValueError):

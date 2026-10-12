@@ -1,16 +1,16 @@
-"""Demo feedback over the real students and teachers, so the dashboard can be tried before the first real survey.
+"""Demo feedback over the real groups and teachers, so the dashboard can be tried before the first real survey.
 
-Demo survey rounds are marked `is_demo`. `clear_demo` removes them with their feedback, and the demo
-"joined the bot" dates of students who never really logged in. Real rounds and real feedback are never touched.
+Demo survey rounds are marked `is_demo`, and so are the made-up accounts that "rated" in them (negative ids - never
+a real Telegram account): about as many per group as the group has students. `clear_demo` removes both, with their
+feedback. Real rounds, real accounts and real feedback are never touched.
 """
 import random
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import delete, func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from app.models import Feedback, Semester, Student, SurveyCampaign, TeachingAssignment
+from app.models import BotUser, Feedback, Group, Semester, SurveyCampaign, TeachingAssignment
 
 COMMENTS = {
     "uz": {
@@ -53,7 +53,7 @@ COMMENTS = {
 # Three rounds: two closed ones (for trends) and one open now, so the survey can be tried in Telegram.
 ROUNDS = [("Demo so‘rovnoma · 1", -20, 5, 0.70), ("Demo so‘rovnoma · 2", -13, 5, 0.80),
           ("Demo so‘rovnoma · 3", -3, 14, 0.55)]  # title, opens (days from now), open for (days), participation
-UNTOUCHED = 30  # this many students get no demo data at all, so they can be used to test the bot
+DEFAULT_GROUP_SIZE = 25  # demo accounts for a group whose number of students is unknown
 
 
 def _clip(x: float) -> int:
@@ -71,10 +71,14 @@ async def create_demo(session: AsyncSession, seed: int = 7) -> dict:
     for gid, tid in (await session.execute(select(TeachingAssignment.group_id, TeachingAssignment.teacher_id)
                                             .where(TeachingAssignment.semester_id == semester.id))).all():
         teachers_by_group.setdefault(gid, set()).add(tid)
-    students = list((await session.execute(select(Student).options(selectinload(Student.group))
-                                           .where(Student.is_active, Student.telegram_id.is_(None))
-                                           .order_by(Student.id))).scalars())
-    students = [s for s in students[UNTOUCHED:] if s.group_id in teachers_by_group]
+    groups = {g.id: g for g in (await session.execute(select(Group).where(Group.id.in_(teachers_by_group))))
+              .scalars()}
+    next_id = min(-1, (await session.scalar(select(func.min(BotUser.id))) or 0) - 1)
+    people = []  # (account id, group)
+    for gid in sorted(groups):
+        for _ in range(groups[gid].student_count or DEFAULT_GROUP_SIZE):
+            people.append((next_id, groups[gid]))
+            next_id -= 1
 
     rounds = [SurveyCampaign(semester=semester, title=t, opens_at=now + timedelta(days=o),
                              closes_at=now + timedelta(days=o + d) - timedelta(minutes=1), is_demo=True)
@@ -87,17 +91,17 @@ async def create_demo(session: AsyncSession, seed: int = 7) -> dict:
     trend = {t: rng.choice([-0.4, -0.2, 0, 0, 0.2, 0.4]) for t in teacher_ids}
     strength = {t: [rng.gauss(0, 0.55) for _ in range(3)] for t in teacher_ids}
     engagement = {g: rng.uniform(0.45, 1.0) for g in teachers_by_group}
-    joined: dict[int, datetime] = {}
+    joined: dict[int, tuple[datetime, int]] = {}  # account -> (first rating, group)
     rows = []
     for i, (camp, (_, _, _, factor)) in enumerate(zip(rounds, ROUNDS)):
         end = min(camp.closes_at, now)
         span = max(1.0, (end - camp.opens_at).total_seconds())
-        for st in students:
-            if rng.random() > engagement[st.group_id] * factor:
+        for uid, group in people:
+            if rng.random() > engagement[group.id] * factor:
                 continue
-            bank = COMMENTS["ru" if "(ru)" in (st.group.name if st.group else "") else "uz"]
+            bank = COMMENTS["ru" if "(ru)" in group.name else "uz"]
             leniency = rng.gauss(0, 0.8)
-            for t in teachers_by_group[st.group_id]:
+            for t in teachers_by_group[group.id]:
                 if rng.random() > 0.9:
                     continue
                 mu = quality[t] + trend[t] * i + leniency
@@ -107,15 +111,17 @@ async def create_demo(session: AsyncSession, seed: int = 7) -> dict:
                     avg = sum(scores) / 3
                     comment = rng.choice(bank["low" if avg < 5 else "mid" if avg < 7.5 else "high"])
                 when = camp.opens_at + timedelta(seconds=span * rng.random() ** 1.6)  # most answer early
-                joined[st.id] = min(joined.get(st.id, when), when - timedelta(minutes=rng.uniform(5, 600)))
-                rows.append({"campaign_id": camp.id, "student_id": st.id, "teacher_id": t, "group_id": st.group_id,
+                first = when - timedelta(minutes=rng.uniform(5, 600))
+                joined[uid] = (min(joined[uid][0], first) if uid in joined else first, group.id)
+                rows.append({"campaign_id": camp.id, "user_id": uid, "teacher_id": t, "group_id": group.id,
                              "teaching": scores[0], "fairness": scores[1],
                              "professionalism": scores[2], "comment": comment, "created_at": when, "updated_at": when})
+    accounts = [{"id": uid, "group_id": gid, "language": "uz", "onboarded_at": when, "first_seen_at": when,
+                 "last_seen_at": when, "is_demo": True} for uid, (when, gid) in joined.items()]
+    for i in range(0, len(accounts), 5000):
+        await session.execute(insert(BotUser), accounts[i:i + 5000])
     for i in range(0, len(rows), 5000):
         await session.execute(insert(Feedback), rows[i:i + 5000])
-    for sid, when in joined.items():
-        await session.execute(update(Student).where(Student.id == sid, Student.registered_at.is_(None))
-                              .values(registered_at=when))
     return {"rounds": len(rounds), "feedback": len(rows), "students": len(joined)}
 
 
@@ -124,6 +130,6 @@ async def has_demo(session: AsyncSession) -> bool:
 
 
 async def clear_demo(session: AsyncSession) -> None:
-    """Remove demo rounds (their feedback goes with them) and demo 'joined the bot' dates."""
+    """Remove demo rounds and the demo accounts (their feedback goes with them)."""
     await session.execute(delete(SurveyCampaign).where(SurveyCampaign.is_demo))
-    await session.execute(update(Student).where(Student.telegram_id.is_(None)).values(registered_at=None))
+    await session.execute(delete(BotUser).where(BotUser.is_demo))

@@ -18,17 +18,17 @@ class Settings(BaseSettings):
     # Timetable: the university's EduPage site, and the faculty section its groups are listed under there.
     edupage_url: str = "https://tiiame.edupage.org"
     edupage_faculty: str = "Iqtisodiyot"
-    # Public HTTPS URL of the survey web app (Telegram Mini App). Empty: the address scripts/tunnel.sh found is used.
+    # Public HTTPS URL of the survey web app (Telegram Mini App). Empty: the address of the tunnel (app.server) is used.
     webapp_url: str = ""
-    # How scripts/tunnel.sh makes the public address: quick (changes after every restart), tailscale or cloudflare
+    # How app.server makes the public address: quick (changes after every restart), tailscale or cloudflare
     # (the same address forever - README › Fixed address).
     tunnel: str = "quick"
-    cloudflare_tunnel_token: str = ""   # TUNNEL=cloudflare only (app.server; scripts/tunnel.sh reads .env itself)
+    cloudflare_tunnel_token: str = ""   # TUNNEL=cloudflare only
 
     # Web server (survey + admin dashboard)
     web_host: str = "127.0.0.1"
     web_port: int = 8000
-    # DEV ONLY: lets you open the survey in a normal browser as any student: /survey?dev=<HEMIS>
+    # DEV ONLY: lets you open the survey in a normal browser on this computer: /survey?dev=<Telegram id>
     dev_mode: bool = False
     # Only serve /admin to requests addressed to localhost (so a public tunnel exposes the survey, not the dashboard).
     admin_local_only: bool = True

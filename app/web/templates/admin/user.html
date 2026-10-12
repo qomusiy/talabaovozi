@@ -1,0 +1,117 @@
+{% extends "admin/base.html" %}
+{% import "admin/_ui.html" as ui with context %}
+{% block title %}{{ u.name }}{% endblock %}
+{% block page %}user{% endblock %}
+{% block campaign_select %}{% endblock %}
+{% block heading %}<h1 class="plain">{{ u.name }}</h1>
+  <p>{% if u.username %}<a class="link" href="https://t.me/{{ u.username }}" target="_blank" rel="noopener">@{{ u.username }}</a> · {% endif %}{{ 'ID ' ~ u.id if u.id > 0 else t('demo_badge') }}</p>{% endblock %}
+{% block content %}
+<section class="grid">
+  <div class="card span-4 user-card">
+    <div class="user-head">
+      {% if u.photo_file_id %}<img class="avatar" src="/admin/users/{{ u.id }}/photo" alt="" loading="lazy">
+      {% else %}<span class="avatar none">{{ (u.first_name or '?')[:1] }}</span>{% endif %}
+      <div><b>{{ u.name }}</b>
+        <div>{% if state == 'blocked' %}<span class="badge bad">{{ t('us_state_blocked') }}</span>
+          {% elif state == 'suspended' %}<span class="badge warn">{{ t('us_state_suspended') }} · {{ local(u.suspended_until) }}</span>
+          {% elif not u.onboarded_at %}<span class="badge neutral">{{ t('us_state_new') }}</span>
+          {% else %}<span class="badge good">{{ t('us_state_ok') }}</span>{% endif %}</div></div>
+    </div>
+    <dl class="facts">
+      <div><dt>{{ t('col_group') }}</dt><dd>{{ grp(u.group.name) if u.group else '—' }}</dd></div>
+      <div><dt>{{ t('us_language') }}</dt><dd>{{ u.language }}{% if u.tg_language %} <span class="muted">· Telegram: {{ u.tg_language }}</span>{% endif %}</dd></div>
+      <div><dt>{{ t('us_first_seen') }}</dt><dd>{{ local(u.first_seen_at) }}</dd></div>
+      <div><dt>{{ t('us_col_seen') }}</dt><dd>{{ local(u.last_seen_at) }}</dd></div>
+      <div><dt>{{ t('us_col_updates') }}</dt><dd>{{ u.updates }}{% if u.floods %} · <span class="badge warn">⚡ {{ t('us_floods', n=u.floods) }}</span>{% endif %}</dd></div>
+      <div><dt>{{ t('us_col_ratings') }}</dt><dd>{{ ratings|length }}{% if u.warnings %} · {{ t('us_warnings', n=u.warnings) }}{% endif %}</dd></div>
+      {% if u.is_premium %}<div><dt>Telegram</dt><dd>⭐ Premium</dd></div>{% endif %}
+    </dl>
+    {% if u.note %}<p class="user-note">{{ icon('pencil') }}<span>{{ u.note }}</span></p>{% endif %}
+    <div class="pub-row">
+      {% if u.id > 0 %}<a class="btn" href="/admin/chats?c={{ u.id }}">{{ icon('chats') }}{{ t('us_chat', n=messages) }}</a>
+      <form method="post" action="/admin/users/{{ u.id }}/refresh"><button class="btn ghost" type="submit" data-tip="{{ t('us_refresh_tip') }}">{{ icon('refresh') }}{{ t('us_refresh') }}</button></form>{% endif %}
+    </div>
+  </div>
+
+  <div class="card span-8">
+    <div class="card-h"><div><h2>{{ t('us_actions') }}</h2><div class="sub">{{ t('us_actions_sub') }}</div></div></div>
+    <div class="form-grid two">
+      <form method="post" action="/admin/users/{{ u.id }}/block" class="form" data-confirm="{{ t('us_unblock_confirm' if u.blocked else 'us_block_confirm') }}">
+        <span class="lbl"><b>{{ icon('shield') }}{{ t('us_block_title') }}</b></span>
+        <input type="hidden" name="blocked" value="{{ '' if u.blocked else 'true' }}">
+        {% if not u.blocked %}<label class="field"><span class="lbl">{{ t('us_reason') }}</span><input type="text" name="note" maxlength="500" placeholder="{{ t('us_reason_ph') }}"></label>{% endif %}
+        <button class="btn {{ '' if u.blocked else 'danger' }}" type="submit">{{ t('us_unblock' if u.blocked else 'us_block') }}</button>
+      </form>
+      <form method="post" action="/admin/users/{{ u.id }}/suspend" class="form">
+        <span class="lbl"><b>{{ icon('pause') }}{{ t('us_suspend_title') }}</b></span>
+        <div class="pub-row">
+          {% for h in suspend_hours %}<button class="btn sm" type="submit" name="hours" value="{{ h }}">{{ t('us_hours_' ~ h) }}</button>{% endfor %}
+          {% if state == 'suspended' %}<button class="btn sm ghost" type="submit" name="hours" value="0">{{ t('us_lift') }}</button>{% endif %}
+        </div>
+        <span class="hint">{{ t('us_suspend_hint') }}</span>
+      </form>
+      <form method="post" action="/admin/users/{{ u.id }}/warn" class="form" id="warn" data-confirm="{{ t('us_warn_confirm') }}">
+        <label class="field"><span class="lbl"><b>{{ icon('send') }}{{ t('us_warn_title') }}</b></span>
+          <textarea name="text" rows="3" maxlength="4000">{{ t('us_warn_default') }}</textarea></label>
+        <button class="btn" type="submit" {{ 'disabled' if u.id <= 0 }}>{{ t('us_warn_send') }}</button>
+      </form>
+      <div class="stack">
+        <form method="post" action="/admin/users/{{ u.id }}/group" class="form">
+          <label class="field"><span class="lbl"><b>{{ icon('groups') }}{{ t('col_group') }}</b></span>
+            <select name="group"><option value="">{{ t('us_no_group') }}</option>
+              {% for g in groups %}<option value="{{ g.id }}" {{ 'selected' if g.id == u.group_id }}>{{ grp(g.name) }}</option>{% endfor %}
+            </select></label>
+          <button class="btn sm" type="submit">{{ t('save') }}</button>
+        </form>
+        <form method="post" action="/admin/users/{{ u.id }}/note" class="form">
+          <label class="field"><span class="lbl"><b>{{ icon('pencil') }}{{ t('us_note') }}</b></span>
+            <textarea name="note" rows="2" maxlength="2000">{{ u.note or '' }}</textarea></label>
+          <button class="btn sm" type="submit">{{ t('save') }}</button>
+        </form>
+      </div>
+    </div>
+    <div class="danger-zone">
+      {% if ratings %}
+      <form method="post" action="/admin/users/{{ u.id }}/ratings/delete" class="pub-row" data-confirm="{{ t('us_ratings_delete_confirm') }}">
+        <select name="campaign" aria-label="{{ t('col_survey') }}"><option value="">{{ t('us_all_rounds') }}</option>
+          {% for cid_, title in campaigns_rated %}<option value="{{ cid_ }}">{{ title }}</option>{% endfor %}</select>
+        <button class="btn danger sm" type="submit">{{ icon('trash') }}{{ t('us_ratings_delete') }}</button>
+      </form>
+      {% endif %}
+      <form method="post" action="/admin/users/{{ u.id }}/delete" data-confirm="{{ t('us_delete_confirm') }}">
+        <button class="btn ghost sm" type="submit" data-tip="{{ t('us_delete_tip') }}">{{ icon('trash') }}{{ t('us_delete') }}</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="card flush span-12">
+    <div class="card-h"><div><h2>{{ t('us_ratings_title') }}</h2><div class="sub">{{ t('us_ratings_sub', n=ratings|length) }}</div></div></div>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>{{ t('col_teacher') }}</th><th>{{ t('col_survey') }}</th><th>{{ t('col_group') }}</th>
+        {% for c in criteria.values() %}<th class="r">{{ c }}</th>{% endfor %}<th class="r">{{ t('overall') }}</th>
+        <th>{{ t('col_comment') }}</th><th>{{ t('col_date') }}</th></tr></thead>
+      <tbody>
+      {% for r in ratings %}
+        <tr><td><a class="link" href="/admin/teachers/{{ r.f.teacher_id }}">{{ r.teacher }}</a></td><td>{{ r.survey }}</td>
+          <td>{{ grp(r.group) or '—' }}</td><td class="r">{{ r.f.teaching }}</td><td class="r">{{ r.f.fairness }}</td>
+          <td class="r">{{ r.f.professionalism }}</td><td class="r"><b>{{ r.overall }}</b></td>
+          <td class="wrap">{{ r.f.comment or '' }}</td><td class="num muted">{{ local(r.f.updated_at) }}</td></tr>
+      {% else %}<tr><td colspan="9">{{ ui.empty('inbox', t('us_no_ratings')) }}</td></tr>{% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+
+  <div class="card span-12">
+    <div class="card-h"><div><h2>{{ t('us_telegram_title') }}</h2><div class="sub">{{ t('us_telegram_sub') }}{% if telegram_info.checked_at %} · {{ telegram_info.checked_at }}{% endif %}</div></div></div>
+    {% if not (telegram_info.chat or telegram_info.user or telegram_info.webapp_user) %}{{ ui.empty('inbox', t('us_no_telegram')) }}{% endif %}
+    {% for key, title in [('chat', 'getChat'), ('user', t('us_src_message')), ('webapp_user', 'Mini App')] %}
+      {% if telegram_info[key] %}
+      <h3 class="tg-src">{{ title }}</h3>
+      <div class="kv">{% for k, v in telegram_info[key].items() %}<span><i>{{ k }}</i> {{ v|tojson if v is mapping or (v is iterable and v is not string) else v }}</span>{% endfor %}</div>
+      {% endif %}
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

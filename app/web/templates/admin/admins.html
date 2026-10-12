@@ -14,7 +14,6 @@
         <div class="main">
           <div class="title"><b>{{ a.username }}</b>{% if a.id == admin.id %}<span class="tag">{{ t('adm_you') }}</span>{% endif %}
             <span class="badge {{ 'good' if a.is_active else 'neutral' }}">{{ t('role_' ~ a.role) }}</span>
-            {% if a.role == 'viewer' %}<span class="tag muted" data-tip="{{ t('adm_identity_hint') }}">{{ icon('eye') }}{{ t('adm_identity_on') if a.show_identity else t('adm_identity_off') }}</span>{% endif %}
             {% if a.telegram_id %}<span class="tag" data-tip="{{ t('tg_linked_tip') }}">{{ icon('send') }}{{ ('@' ~ a.telegram_username) if a.telegram_username else (a.telegram_name or 'Telegram') }}</span>
             {% elif a.telegram_username %}<span class="tag muted" data-tip="{{ t('tg_waiting', value=a.telegram_username) }}">{{ icon('clock') }}@{{ a.telegram_username }}</span>{% endif %}</div>
           <div class="sub">{{ local_time(a.created_at, '%d.%m.%Y') }}</div>
@@ -38,8 +37,6 @@
           <label class="field grow"><span class="lbl">{{ t('tg_username') }}</span><input type="text" name="telegram_username" value="{{ '@' ~ a.telegram_username if a.telegram_username else '' }}" placeholder="@username" maxlength="40"></label>
           {% endif %}
           <label class="check"><input type="checkbox" name="is_active" value="true" {{ 'checked' if a.is_active }}>{{ t('col_active') }}</label>
-          <label class="switch-row wide" data-viewer-only {{ 'hidden' if a.role != 'viewer' }}><span class="switch"><input type="checkbox" name="show_identity" value="true" {{ 'checked' if a.show_identity }}></span>
-            <span><b>{{ t('adm_identity') }}</b><span class="hint">{{ t('adm_identity_hint') }}</span></span></label>
           <button class="btn primary" type="submit">{{ t('save') }}</button>
         </form>
       </div>
@@ -56,8 +53,6 @@
         <span class="hint">{{ t('tg_username_hint') }}</span></label>
       <label class="field"><span class="lbl">{{ t('col_role') }}</span>
         <select name="role" data-role><option value="viewer">{{ t('role_viewer') }}</option><option value="superadmin">{{ t('role_superadmin') }}</option></select></label>
-      <label class="switch-row" data-viewer-only><span class="switch"><input type="checkbox" name="show_identity" value="true" checked></span>
-        <span><b>{{ t('adm_identity') }}</b><span class="hint">{{ t('adm_identity_hint') }}</span></span></label>
       <button class="btn primary" type="submit" data-tip="{{ t('tip_adm_create') }}">{{ icon('plus') }}{{ t('adm_create') }}</button>
     </form>
   </div>

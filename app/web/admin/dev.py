@@ -136,16 +136,17 @@ async def audit_page(request: Request, tab: str = "sessions", user: str = "", ki
 SCHEMA_LAYOUT = {  # table -> (column, row) on the diagram; the rest go to the "system" column
     "departments": (1, 1), "teachers": (1, 2), "subjects": (1, 3),
     "semesters": (2, 1), "teaching_assignments": (2, 2), "timetable_snapshots": (2, 3),
-    "groups": (3, 1), "students": (3, 2), "survey_campaigns": (3, 3),
+    "groups": (3, 1), "bot_users": (3, 2), "survey_campaigns": (3, 3),
     "feedback": (4, 2),
 }
 SCHEMA_NOTES = {
     "timetable_snapshots": "EduPage JSON: groups, teachers, subjects, rooms, lessons",
-    "teaching_assignments": "who teaches whom → whom a student rates",
-    "feedback": "1 row = 1 student × 1 teacher × 1 survey",
+    "teaching_assignments": "who teaches whom → whom a group's students rate",
+    "feedback": "1 row = 1 bot user × 1 teacher × 1 survey",
+    "bot_users": "everyone who uses the bot (Telegram account); anonymous to all but programmers",
     "teachers": "room_number = the teacher's room",
     "bot_chats": "everyone who wrote to the bot (Suhbatlar)",
-    "bot_messages": "the bot's messages both ways; passports masked",
+    "bot_messages": "the bot's messages both ways",
 }
 
 

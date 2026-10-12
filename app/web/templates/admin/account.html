@@ -54,7 +54,7 @@
     <li>{{ icon('type') }}<span>{{ t('dp_text') }}: <b>{{ t('dp_size_' ~ display.text) }}</b></span></li>
     <li>{{ icon('monitor' if display.theme == 'auto' else 'sun' if display.theme == 'light' else 'moon') }}<span>{{ t('dp_theme') }}: <b>{{ t('dp_theme_' ~ display.theme) }}</b></span></li>
     {% for key in ['contrast', 'motion', 'spacing', 'links'] %}{% if display[key] %}<li>{{ icon('check') }}<span>{{ t('dp_' ~ key) }}</span></li>{% endif %}{% endfor %}
-    {% if not show_who %}<li>{{ icon('eye_off') }}<span>{{ t('dp_hide_names') }}</span></li>{% endif %}
+    {% if is_programmer and not show_who %}<li>{{ icon('eye_off') }}<span>{{ t('dp_hide_names') }}</span></li>{% endif %}
   </ul>
   <button class="btn" type="button" data-open-display>{{ icon('text_size') }}{{ t('dp_open') }}</button>
 </section>
