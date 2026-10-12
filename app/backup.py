@@ -114,6 +114,7 @@ def transfer() -> Path:
     """.env + a fresh copy of the database + uploaded files, for scripts/setup.sh or scripts\\setup.bat elsewhere."""
     dump = make()
     out = BACKUPS / f"talaba-transfer-{datetime.now():%Y-%m-%d_%H%M}.tar.gz"
+    out.touch(mode=0o600)  # secrets inside: only this account may read it (Linux)
     with tarfile.open(out, "w:gz") as tar:
         tar.add(ROOT / ".env", arcname=".env")
         tar.add(dump, arcname=f"data/backups/{dump.name}")
