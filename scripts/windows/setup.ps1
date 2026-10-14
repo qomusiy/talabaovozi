@@ -209,9 +209,16 @@ Say "4/7 Settings (.env) and your data"
 $rows = Psql $DbUser $DbPass $DbName "select (select count(*) from public.admins) + (select count(*) from public.feedback)"
 $empty = ($LASTEXITCODE -ne 0) -or ($rows -eq "0")   # no tables yet, or no admin accounts and no ratings in them
 $replace = $false
-if ($Unpacked -and -not $empty) {   # set up before: this computer has data of its own
-    Write-Host "This computer's database already has data." -ForegroundColor Yellow
-    $answer = Read-Host "Replace it with the data from $(Split-Path $Transfer -Leaf)? (a copy of it is saved first) [y/N]"
+$dump = if ($Unpacked) { Get-ChildItem "$Unpacked\data\backups" -Filter "feedback-*.sql.gz" | Select-Object -First 1 } else { $null }
+if ($Unpacked -and -not $dump) { Fail "There is no database copy in $Transfer" }
+if ($Unpacked -and -not $empty) {   # set up before: this computer has data of its own - show both, then ask
+    Write-Host "This computer's database already has data. What each one holds:" -ForegroundColor Yellow
+    $here = (& $VenvPy -X utf8 -m app.backup describe 2>&1 | Out-String).Trim()
+    $there = (& $VenvPy -X utf8 -m app.backup describe $dump.FullName 2>&1 | Out-String).Trim()
+    Write-Host "  this computer:  $here"
+    Write-Host "  the file:       $there"
+    Write-Host "Replace this computer's data with the file's? A copy of this computer's data is saved first"
+    $answer = Read-Host "(data\backups), so nothing is lost for good. [y/N]"
     $replace = $answer -match '^\s*(y|yes|ha)\s*$'
 }
 if ($Unpacked -and ($empty -or $replace)) {
@@ -225,8 +232,6 @@ if ($Unpacked -and ($empty -or $replace)) {
         }
         Copy-Item "$Unpacked\.env" "$Root\.env" -Force
     }
-    $dump = Get-ChildItem "$Unpacked\data\backups" -Filter "feedback-*.sql.gz" | Select-Object -First 1
-    if (-not $dump) { Fail "There is no database copy in $Transfer" }
     New-Item -ItemType Directory -Force "$Root\data\backups" | Out-Null
     Copy-Item $dump.FullName "$Root\data\backups\" -Force
     Write-Host "Restoring the database from $($dump.Name)..."

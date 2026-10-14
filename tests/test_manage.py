@@ -832,3 +832,55 @@ async def test_hiding_who_rated_from_ones_own_panel(dev, session, world):
     assert "Aziz Karimov" not in (await dev.get(f"/admin/teachers/{teacher.id}")).text
     await dev.post("/admin/account/display", data={"text": "100", "theme": "auto"})
     assert "Aziz Karimov" in (await dev.get("/admin/comments")).text
+
+
+# ---------------------------------------------------------------- Server (programmer): the server computer from anywhere
+
+async def test_server_page_actions_logs_and_copies(boss, dev, session, runtime_files, monkeypatch):
+    import json
+    import time
+
+    import app.runtime
+    from app.web.admin import server_page
+    assert (await boss.get("/admin/server")).status_code == 404            # the programmer's only
+    assert (await boss.post("/admin/server/action", data={"action": "restart"})).status_code == 404
+    page = await dev.get("/admin/server")
+    assert page.status_code == 200 and "/admin/server/live" in page.text
+
+    # Without the launcher nothing is asked; with it, the request lands in its folder (with whom to tell).
+    r = await dev.post("/admin/server/action", data={"action": "update"})
+    assert r.status_code == 409 and not (runtime_files / "control").exists()
+    app.runtime.LAUNCHER_FILE.write_text(json.dumps({"pid": 1, "at": int(time.time()), "commit": "abc1234"}))
+    me = await session.scalar(select(Admin).where(Admin.username == "agentsmith"))
+    me.telegram_id = 4242
+    await session.commit()
+    assert (await dev.post("/admin/server/action", data={"action": "backup"})).json()["ok"]
+    [request] = list((runtime_files / "control").glob("*.json"))
+    req = json.loads(request.read_text())
+    assert req["action"] == "backup" and req["by"] == "agentsmith (dashboard)" and req["notify"] == [4242]
+    assert (await dev.post("/admin/server/action", data={"action": "rm -rf"})).status_code == 400
+
+    # One at a time; the page shows what is going on.
+    app.runtime.CONTROL_LOG_FILE.write_text(json.dumps([{"id": "1", "action": "update", "by": "x", "at": 1,
+                                                         "state": "running", "from": "aaa1111", "to": "bbb2222"}]))
+    assert (await dev.post("/admin/server/action", data={"action": "restart"})).status_code == 409
+    live = (await dev.get("/admin/server/live")).json()
+    assert live["busy"] and "aaa1111 → bbb2222" in live["html"]
+
+    # Logs: only the server's own.
+    logs = runtime_files / "logs"
+    logs.mkdir()
+    (logs / "bot.log").write_text("line 1\nline 2\n")
+    monkeypatch.setattr(server_page, "LOGS", logs)
+    assert (await dev.get("/admin/server/logs", params={"name": "bot"})).json()["lines"] == ["line 1", "line 2"]
+    assert (await dev.get("/admin/server/logs", params={"name": "../../.env"})).status_code == 404
+
+    # Copies: the database's may be downloaded, a transfer file (it holds .env) never.
+    copies = runtime_files / "backups"
+    copies.mkdir()
+    (copies / "feedback-2026-10-13_0330.sql.gz").write_bytes(b"x")
+    (copies / "talaba-transfer-2026-10-13_0330.tar.gz").write_bytes(b"secret")
+    monkeypatch.setattr(server_page.backup, "BACKUPS", copies)
+    assert (await dev.get("/admin/server/backups/feedback-2026-10-13_0330.sql.gz")).content == b"x"
+    assert (await dev.get("/admin/server/backups/talaba-transfer-2026-10-13_0330.tar.gz")).status_code == 404
+    assert "talaba-transfer" not in (await dev.get("/admin/server")).text

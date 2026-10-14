@@ -1,0 +1,59 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ t('nav_server') }}{% endblock %}
+{% block page %}server{% endblock %}
+{% block campaign_select %}{% endblock %}
+{% block heading %}<h1 class="plain">{{ t('nav_server') }} <span class="muted h-sub">{{ machine.host }}</span></h1><p>{{ t('sv_sub') }}</p>{% endblock %}
+{% block content %}
+<div id="server-live" data-url="/admin/server/live" data-action="/admin/server/action"
+     data-offline="{{ t('sv_offline') }}" data-error="{{ t('sv_error') }}">
+  {% include "admin/_server_live.html" %}
+</div>
+
+<section class="grid">
+  <div class="card span-8 flush" id="server-logs" data-url="/admin/server/logs">
+    <div class="card-h"><div><h2>{{ t('sv_logs') }}</h2><div class="sub">{{ t('sv_logs_sub') }}</div></div>
+      <div class="toolbar">
+        <div class="seg" role="tablist" aria-label="{{ t('sv_logs') }}">
+          {% for n in log_names %}<button type="button" role="tab" data-log="{{ n }}" class="{{ 'on' if loop.first }}">{{ t('sv_part_' ~ n) }}</button>{% endfor %}
+        </div>
+        <button class="btn sm ghost" type="button" data-log-refresh data-tip="{{ t('sv_logs_refresh') }}">{{ icon('refresh') }}</button>
+      </div></div>
+    <pre class="sv-log" tabindex="0" aria-live="off">…</pre>
+  </div>
+
+  <div class="card span-4">
+    <div class="card-h"><div><h2>{{ t('sv_machine') }}</h2><div class="sub">{{ t('sv_machine_sub') }}</div></div></div>
+    <dl class="facts">
+      <div><dt>{{ t('sv_os') }}</dt><dd>{{ machine.os }} · Python {{ machine.python }}</dd></div>
+      <div><dt>{{ t('sv_disk') }}</dt><dd>{{ t('sv_disk_free', free=machine.disk_free, total=machine.disk_total) }}
+        {% if machine.disk_pct >= 90 %}<span class="badge bad">{{ machine.disk_pct }}%</span>{% endif %}</dd></div>
+      <div><dt>{{ t('sv_db') }}</dt><dd>{{ machine.db }}</dd></div>
+      <div><dt>{{ t('sv_folder') }}</dt><dd><code>{{ machine.root }}</code></dd></div>
+    </dl>
+  </div>
+</section>
+
+<section class="grid">
+  <div class="card span-7 flush">
+    <div class="card-h"><div><h2>{{ t('sv_copies') }}</h2><div class="sub">{{ t('sv_copies_sub') }}</div></div></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>{{ t('sv_col_file') }}</th><th>{{ t('col_date') }}</th><th class="r">{{ t('sv_col_size') }}</th><th class="r"></th></tr></thead>
+      <tbody>
+      {% for c in copies %}
+        <tr><td><code>{{ c.name }}</code></td><td class="num muted">{{ c.at }}</td><td class="r num">{{ c.size }}</td>
+          <td class="r"><a class="btn sm ghost" href="/admin/server/backups/{{ c.name }}" download data-tip="{{ t('sv_download_tip') }}">{{ icon('download') }}</a></td></tr>
+      {% else %}<tr><td colspan="4" class="muted">{{ t('sv_copies_none') }}</td></tr>{% endfor %}
+      </tbody>
+    </table></div>
+  </div>
+
+  <div class="card span-5">
+    <div class="card-h"><div><h2>{{ t('sv_remote') }}</h2><div class="sub">{{ t('sv_remote_sub') }}</div></div></div>
+    <ul class="sv-howto">
+      <li>{{ icon('bot') }}<span>{{ t('sv_remote_bot') }}</span></li>
+      <li>{{ icon('globe') }}<span>{{ t('sv_remote_web_on') if public_admin else t('sv_remote_web') }}</span></li>
+      <li>{{ icon('terminal') }}<span>{{ t('sv_remote_cli') }}</span></li>
+    </ul>
+  </div>
+</section>
+{% endblock %}

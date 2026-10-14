@@ -4,8 +4,12 @@ When the server starts, or the public address changes, each of them gets ONE mes
 bot, whether the site answers on its public address, whether a survey is open, where the dashboard is. The bot then
 edits that same message as things change - until everything works, or 15 minutes have passed - instead of sending
 a new message for every change.
+
+Also: the result of a Server action (update, restart, backup, check - from the dashboard or the bot) goes to whoever
+asked for it, once it is done; and programmer accounts with the messages on hear once of each new version on GitHub.
 """
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime
@@ -24,7 +28,7 @@ from app.bot.admin_i18n import ta
 from app.config import get_settings
 from app.db import session_scope
 from app.models import Admin, BotUser
-from app.runtime import server_status, webapp_url
+from app.runtime import ROOT, control_log, server_status, version_info, webapp_url
 from app.services.survey import active_campaign
 
 log = logging.getLogger("bot")
@@ -177,6 +181,66 @@ async def send_now(bot: Bot, chat_id: int, lang: str) -> None:
         await _save(state)
 
 
+# ---------------------------------------------------------------- Server actions: results, new versions
+
+TOLD_FILE = ROOT / "data" / "runtime" / "control_told.json"   # what was already told (results, new versions)
+
+
+def _told() -> dict:
+    try:
+        told = json.loads(TOLD_FILE.read_text(encoding="utf-8"))
+        return told if isinstance(told, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+async def _languages(ids: list[int]) -> dict[int, str]:
+    async with session_scope() as session:
+        rows = (await session.execute(select(BotUser.id, BotUser.language).where(BotUser.id.in_(ids)))).all()
+    return {uid: lang if lang in ("uz", "en", "ru") else "uz" for uid, lang in rows}
+
+
+async def tell_results(bot: Bot, now: float | None = None) -> None:
+    """Each finished action, to the chats that asked for it (once; nothing older than a day - e.g. after a restore)."""
+    now = now or time.time()
+    told = _told()
+    done = set(told.get("results", []))
+    fresh = [e for e in control_log() if e.get("state") != "running" and e.get("notify") and e.get("id") not in done
+             and now - e.get("finished", 0) < 86400]
+    announce = None
+    info = version_info()
+    if info.get("behind") and not info.get("failed") and info.get("commits"):
+        newest = info["commits"][0]["short"]
+        if newest != told.get("announced"):
+            announce = newest
+    if not fresh and not announce:
+        return
+    from app.bot.handlers.admin import commit_lines  # (the admin menu imports this module)
+    for e in fresh:
+        langs = await _languages(e["notify"])
+        for chat_id in e["notify"]:
+            lang = langs.get(chat_id, "uz")
+            text = ta(lang, "srv_result", action=ta(lang, f"srv_act_{e['action']}"),
+                      result=ta(lang, f"srv_r_{e['state']}" if e["state"] in ("ok", "failed", "rolled_back")
+                                else "srv_r_failed"), message=escape(e.get("message", ""))[:600])
+            await _send(bot, chat_id, text, InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                text=ta(lang, "btn_server"), callback_data="adm:srv")]]))
+        done.add(e["id"])
+    if announce:
+        async with session_scope() as session:
+            who = await targets(session)
+            programmers = set((await session.scalars(select(Admin.telegram_id).where(
+                Admin.is_active, Admin.role == "programmer", Admin.telegram_id.is_not(None)))).all())
+        for chat_id, lang in who.items():
+            if chat_id in programmers:
+                await _send(bot, chat_id, ta(lang, "srv_new_version", commits=commit_lines(info["commits"])),
+                            InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                                text=ta(lang, "btn_srv_update"), callback_data="adm:srv:update")]]))
+    TOLD_FILE.parent.mkdir(parents=True, exist_ok=True)
+    TOLD_FILE.write_text(json.dumps({"results": sorted(done)[-200:], "announced": announce or told.get("announced")}),
+                         encoding="utf-8")
+
+
 async def alerts_loop(bot: Bot) -> None:
     chatlog.origin.set("system")
     while True:
@@ -184,4 +248,8 @@ async def alerts_loop(bot: Bot) -> None:
             await tick(bot)
         except Exception:  # a DB hiccup: try again on the next round
             log.exception("Server message check failed")
+        try:
+            await tell_results(bot)
+        except Exception:
+            log.exception("Telling the results of server actions failed")
         await asyncio.sleep(EVERY)

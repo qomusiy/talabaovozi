@@ -1282,3 +1282,35 @@ html[data-links] a.link { text-decoration: underline; text-underline-offset: 3px
   padding-top: 14px; border-top: 1px dashed var(--border); }
 .tg-src { margin: 14px 0 8px; font-size: .75rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 td.wrap { white-space: normal; min-width: 220px; }
+
+/* ---------- Server (programmer): the server computer, from anywhere ---------- */
+.sv-progress { align-items: flex-start; }
+.sv-progress small { font-weight: 400; opacity: .85; }
+.sv-progress code, .sv-commit code, .sv-commits code { font: 600 .75rem var(--mono); }
+.spin { width: 16px; height: 16px; flex: none; margin-top: 2px; border-radius: 50%; border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor; animation: sv-rot .8s linear infinite; }
+@keyframes sv-rot { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2.4s; } }
+.sv-url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sv-actions { display: grid; gap: 12px; }
+.sv-action { display: grid; grid-template-columns: minmax(200px, auto) 1fr; gap: 6px 14px; align-items: center; }
+.sv-action .btn { justify-content: flex-start; }
+.sv-action .hint { margin: 0; }
+.sv-parts, .sv-commits, .sv-howto { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.sv-parts li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sv-parts .muted { font-size: .8125rem; }
+.sv-commit { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin: 0 0 12px; }
+.sv-commit svg.i { width: 16px; height: 16px; color: var(--muted); }
+.sv-commits { gap: 6px; font-size: .8125rem; margin-bottom: 12px; }
+.sv-howto li { display: flex; gap: 10px; align-items: flex-start; font-size: .8438rem; }
+.sv-howto svg.i { width: 17px; height: 17px; flex: none; margin-top: 2px; color: var(--accent); }
+.sv-log { margin: 0; padding: 14px 18px; height: 420px; overflow: auto; background: var(--surface-2); border-top: 1px solid var(--border);
+  font: .75rem/1.55 var(--mono); white-space: pre-wrap; word-break: break-word; color: var(--ink-2); }
+#server-live.offline { opacity: .6; }
+.sv-msg { margin-top: 3px; font-size: .75rem; color: var(--muted); overflow-wrap: anywhere; }
+@media (max-width: 720px) {
+  .sv-action { grid-template-columns: 1fr; }
+  .sv-by { display: none; }
+  .sv-log { height: 320px; }
+}
+.kpi .value.small-value { font-size: 1.15rem; }

@@ -494,3 +494,48 @@ async def test_daily_report_reaches_admins_who_want_it(chat, session, world):
     assert await send_daily(chat.bot, evening) == 0                       # once a day
     report = calls_of(chat, "SendMessage")[-1]
     assert report.chat_id == 101 and "Kuz" in report.text
+
+
+async def test_server_card_for_the_programmer_and_results_told_once(chat, session, world, runtime_files):
+    import json
+    import time
+
+    import app.runtime
+    from app.bot import server_alerts
+    boss = await make_admin(session, username="boss", telegram_id=777)
+    out = await chat.send("/admin")
+    assert "adm:srv" not in str(chat.last_markup())                      # a superadmin has no Server card
+    await chat.press("adm:srv", photo=True)
+    assert any(c.show_alert for c in calls_of(chat, "AnswerCallbackQuery"))
+
+    boss.role = "programmer"
+    await session.commit()
+    app.runtime.VERSION_FILE.write_text(json.dumps({"current": {"short": "abc1234", "date": "2026-10-13T10:00:00+05:00",
+                                                                "subject": "x"}, "behind": 2, "failed": False,
+                                                    "commits": [{"short": "ddd4444", "date": "2026-10-13", "subject": "Faster bot"},
+                                                                {"short": "ccc3333", "date": "2026-10-13", "subject": "Fix"}]}))
+    out = await chat.press("adm:srv", photo=True)
+    assert "abc1234" in out[-1] and "Faster bot" in out[-1] and "scripts\\server.bat restart" in out[-1]  # no launcher
+    assert "adm:srv:update" not in str(chat.last_markup())               # nothing can be done without it
+    app.runtime.LAUNCHER_FILE.write_text(json.dumps({"pid": 1, "at": int(time.time())}))
+    await chat.press("adm:srv", photo=True)
+    assert "adm:srv:update" in str(chat.last_markup())
+    out = await chat.press("adm:srv:update", photo=True)
+    assert "Faster bot" in out[-1] and chat.last_markup().inline_keyboard[0][0].callback_data == "adm:srv:do:update"
+    await chat.press("adm:srv:do:update", photo=True)
+    [request] = list((runtime_files / "control").glob("*.json"))
+    req = json.loads(request.read_text())
+    assert req["action"] == "update" and req["notify"] == [777] and req["by"] == "boss (Telegram)"
+
+    # Done: the result goes to the chat that asked, once; a new version is announced once to programmers.
+    app.runtime.CONTROL_LOG_FILE.write_text(json.dumps([{"id": req["id"], "action": "update", "by": "boss", "at": 1,
+                                                         "state": "rolled_back", "message": "kept stopping",
+                                                         "notify": [777], "finished": int(time.time())}]))
+    boss.prefs = {"tg_server": True}
+    await session.commit()
+    before = len(calls_of(chat, "SendMessage"))
+    await server_alerts.tell_results(chat.bot)
+    sent = [c.text for c in calls_of(chat, "SendMessage")[before:]]
+    assert len(sent) == 2 and "kept stopping" in sent[0] and "Faster bot" in sent[1]
+    await server_alerts.tell_results(chat.bot)
+    assert len(calls_of(chat, "SendMessage")) == before + 2

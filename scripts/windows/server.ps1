@@ -5,7 +5,8 @@
     scripts\server.bat logs [name]       follow a log: server (default) | web | bot | tunnel   (Ctrl+C to stop)
     scripts\server.bat restart           after changing .env (code updates: update)
     scripts\server.bat stop | start
-    scripts\server.bat update            git pull, new packages, database update, restart
+    scripts\server.bat update            the newest version from GitHub: a backup first, then the new version
+                                         is checked - if it doesn't run properly, the previous one comes back
     scripts\server.bat backup            a database copy now (one is made every night at 03:30 by itself)
     scripts\server.bat backups           the copies (data\backups)
     scripts\server.bat restore <file>    put a copy back - replaces ALL data
@@ -72,16 +73,20 @@ function Show-Status {
     $last = Get-ChildItem "$Root\data\backups" -Filter "feedback-*.sql.gz" -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime | Select-Object -Last 1
     Write-Host ("  backup   " + $(if ($last) { $last.Name } else { "none yet" }))
+    if (Test-Path "$Runtime\version.json") {
+        $v = Get-Content "$Runtime\version.json" -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($v.current) {
+            $news = if ($v.behind -gt 0) { " - $($v.behind) newer on GitHub (scripts\server.bat update)" } else { "" }
+            $d = "$($v.current.date)"; if ($d.Length -gt 10) { $d = $d.Substring(0, 10) }
+            Write-Host ("  version  " + $v.current.short + " of " + $d + $news)
+        }
+    }
 }
 
 # start / stop / restart / update / restore need administrator rights (a new window opens)
 $needsAdmin = @("start", "stop", "restart", "update", "restore") -contains $Command
 $me = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if ($needsAdmin -and -not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    if ($Command -eq "update") {   # git runs as you (it owns the folder), the rest as administrator
-        & git -C $Root pull --ff-only
-        if ($LASTEXITCODE -ne 0) { Write-Host "git pull failed (see above)" -ForegroundColor Red; exit 1 }
-    }
     $argList = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" $Command -Elevated"
     if ($Arg) { $argList += " `"$((Resolve-Path $Arg).Path)`"" }
     try { Start-Process powershell.exe -Verb RunAs -ArgumentList $argList -ErrorAction Stop }
@@ -98,12 +103,18 @@ switch ($Command) {
         Stop-Server; Start-Sleep -Seconds 2; Start-ScheduledTask -TaskName $TaskName
         Wait-Started; Show-Status
     }
-    "update" {
-        if (-not $Elevated) { & git -C $Root pull --ff-only }   # already done before asking for rights
-        Stop-Server
-        & $VenvPy -m pip install -q --disable-pip-version-check -r "$Root\requirements.txt"
-        Start-ScheduledTask -TaskName $TaskName   # the server updates the database when it starts
-        Wait-Started; Show-Status
+    "update" {   # the running server does it (app.server: backup, check, put back if needed)
+        & $VenvPy -X utf8 -m app.server update
+        if ($LASTEXITCODE -eq 2) {   # the server is not running: the plain way
+            Write-Host "The server is not running - updating the plain way"
+            & git -c safe.directory=* -C $Root pull --ff-only
+            if ($LASTEXITCODE -ne 0) { Write-Host "git pull failed (see above)" -ForegroundColor Red; break }
+            Stop-Server
+            & $VenvPy -m pip install -q --disable-pip-version-check -r "$Root\requirements.txt"
+            Start-ScheduledTask -TaskName $TaskName   # the server updates the database when it starts
+            Wait-Started
+        }
+        Show-Status
     }
     "logs" {
         $name = if ($Arg) { $Arg } else { "server" }

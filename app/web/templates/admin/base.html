@@ -8,7 +8,7 @@
   <link rel="preload" href="/static/vendor/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="/static/vendor/geist-mono-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/static/fonts-admin.css?v=1">
-  <link rel="stylesheet" href="/static/admin.css?v=18">
+  <link rel="stylesheet" href="/static/admin.css?v=20">
 </head>
 <body data-page="{% block page %}{% endblock %}">
 <div class="progress" id="progress" aria-hidden="true"></div>
@@ -46,6 +46,7 @@
     {% if is_programmer %}
     <div class="nav-label" style="--dash: var(--s4)">{{ t('nav_section_dev') }}</div>
     <nav class="nav">
+      <a href="/admin/server" class="{{ 'on' if path.startswith('/admin/server') }}" data-nav>{{ icon('server') }}{{ t('nav_server') }}</a>
       <a href="/admin/users" class="{{ 'on' if path.startswith('/admin/users') }}" data-nav>{{ icon('user') }}{{ t('nav_users') }}</a>
       <a href="/admin/audit" class="{{ 'on' if path.startswith('/admin/audit') }}" data-nav>{{ icon('activity') }}{{ t('nav_audit') }}</a>
       <a href="/admin/chats" class="{{ 'on' if path.startswith('/admin/chats') }}" data-nav>{{ icon('chats') }}{{ t('nav_chats') }}</a>
@@ -151,6 +152,6 @@
 <script type="application/json" id="i18n">{{ js_texts | tojson }}</script>
 {% if data is defined %}<script type="application/json" id="page-data">{{ data | tojson }}</script>{% endif %}
 <script src="/static/vendor/echarts.min.js"></script>
-<script src="/static/admin.js?v=19"></script>
+<script src="/static/admin.js?v=20"></script>
 </body>
 </html>

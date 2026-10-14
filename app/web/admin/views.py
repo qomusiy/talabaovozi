@@ -75,7 +75,7 @@ SECTIONS = {"/admin": "nav_overview", "/admin/teachers": "nav_teachers", "/admin
             "/admin/users": "nav_users", "/admin/comments": "nav_comments", "/admin/timetable": "tt_title",
             "/admin/surveys": "nav_surveys", "/admin/data": "nav_data", "/admin/records": "nav_records", "/admin/audit": "nav_audit",
             "/admin/bot": "nav_bot", "/admin/admins": "nav_admins", "/admin/account": "nav_account",
-            "/admin/chats": "nav_chats"}
+            "/admin/chats": "nav_chats", "/admin/server": "nav_server"}
 CRUMB_TEXTS = (*SECTIONS.values(), "tt_feedback")
 
 

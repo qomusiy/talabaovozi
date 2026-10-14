@@ -1,7 +1,9 @@
 """The bot for dashboard accounts linked to Telegram (app.services.admin_link): a card with the survey's numbers,
 the site's addresses, details, a Mini App with charts, and switches - server status messages (app.bot.server_alerts)
 and the daily report, both off until switched on. Other users never see any of it; viewers see the numbers,
-superadmins can also ask for a new public address."""
+superadmins can also ask for a new public address, the programmer account has 🖥 Server: the server computer from
+anywhere - its state, update from GitHub, restart, backup (the launcher does them, app.server.Launcher)."""
+import platform
 from contextlib import suppress
 from datetime import datetime
 from html import escape
@@ -21,7 +23,9 @@ from app.bot.handlers.menu import TASHKENT
 from app.bot.i18n import t
 from app.config import get_settings
 from app.models import Admin
-from app.runtime import fixed_address, request_tunnel_restart
+from app import backup
+from app.runtime import (control_log, fixed_address, launcher_alive, request_control, request_tunnel_restart,
+                         server_status, version_info)
 from app.services import admin_link, admin_stats
 from app.web.admin.i18n import translator
 
@@ -78,6 +82,8 @@ async def admin_card(session: AsyncSession, admin: Admin, lang: str) -> tuple:
     if admin.is_super and not fixed_address():
         tools.append(_b(ta(lang, "btn_tunnel"), "adm:tunnel"))
     rows.append(tools)
+    if admin.is_programmer:
+        rows.append([_b(ta(lang, "btn_server"), "adm:srv")])
     rows.append([_b(ta(lang, "btn_student"), "home"), _b(ta(lang, "btn_unlink"), "adm:unlink")])
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -158,6 +164,109 @@ async def admin_cmd(message: Message, session: AsyncSession, admin: Admin, lang:
 async def link_cmd(message: Message, session: AsyncSession, lang: str) -> None:
     text, markup = await links_card(session, lang)
     await message.answer(text, reply_markup=markup)
+
+
+# ---------------------------------------------------------------- 🖥 Server (the programmer account)
+
+def _when(ts: int | float | None) -> str:
+    return datetime.fromtimestamp(ts, TASHKENT).strftime("%d.%m %H:%M") if ts else "—"
+
+
+def commit_lines(commits: list[dict], limit: int = 8) -> str:
+    lines = [f"• <code>{escape(c['short'])}</code> {escape(c['subject'][:80])}" for c in commits[:limit]]
+    if len(commits) > limit:
+        lines.append(f"• … +{len(commits) - limit}")
+    return "\n".join(lines)
+
+
+def server_card(lang: str) -> tuple[str, InlineKeyboardMarkup]:
+    lang = admin_lang(lang)
+    st, info, log = server_status(), version_info(), control_log()
+    lines = [ta(lang, "srv_title", host=escape(platform.node())), ""]
+    if st:
+        parts = [("🟢 " if c.get("running") else "🔴 ") + ta(lang, f"srv_part_{name}")
+                 for name, c in (st.get("children") or {}).items() if name in ("web", "bot", "tunnel")]
+        lines += [" · ".join(parts), ta(lang, "srv_started", at=_when(st.get("started")))]
+    else:
+        lines.append(ta(lang, "srv_down"))
+    if current := info.get("current"):
+        lines.append(ta(lang, "srv_version", short=escape(current["short"]), date=current["date"][:10]))
+    if info.get("error"):
+        lines.append(ta(lang, "srv_check_error", e=escape(info["error"][:150])))
+    elif info.get("failed"):
+        lines.append(ta(lang, "srv_failed"))
+    elif info.get("behind"):
+        lines += [ta(lang, "srv_behind", n=info["behind"]), commit_lines(info.get("commits", []), 5)]
+    elif current:
+        lines.append(ta(lang, "srv_newest"))
+    if last_copy := backup.newest():
+        lines.append(ta(lang, "srv_backup", name=last_copy.name))
+    active = next((e for e in log if e.get("state") == "running"), None)
+    if active:
+        lines += ["", ta(lang, "srv_busy", action=ta(lang, f"srv_act_{active['action']}"))]
+    elif log:
+        e = log[0]
+        lines.append(ta(lang, "srv_last", action=ta(lang, f"srv_act_{e['action']}"),
+                        result=ta(lang, f"srv_r_{e['state']}"), at=_when(e.get("finished") or e.get("at"))))
+    alive = launcher_alive()
+    if not alive:
+        lines += ["", ta(lang, "srv_no_launcher")]
+    rows = []
+    if alive and not active:
+        if info.get("behind") and not info.get("failed") and not info.get("ahead"):
+            rows.append([_b(ta(lang, "btn_srv_update"), "adm:srv:update")])
+        rows += [[_b(ta(lang, "btn_srv_restart"), "adm:srv:restart"), _b(ta(lang, "btn_srv_backup"), "adm:srv:backup")],
+                 [_b(ta(lang, "btn_srv_check"), "adm:srv:check")]]
+    rows.append([_b(ta(lang, "btn_refresh"), "adm:srv"), _b(ta(lang, "btn_back"), "adm:home")])
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _programmer(call: CallbackQuery, admin: Admin, lang: str) -> bool:
+    if admin.is_programmer:
+        return True
+    await call.answer(ta(admin_lang(lang), "srv_programmer_only"), show_alert=True)
+    return False
+
+
+@router.callback_query(F.data == "adm:srv", is_admin)
+async def server_cb(call: CallbackQuery, admin: Admin, lang: str) -> None:
+    if await _programmer(call, admin, lang):
+        await swap_card(call.message, *server_card(lang))
+        await call.answer()
+
+
+@router.callback_query(F.data.in_({"adm:srv:update", "adm:srv:restart"}), is_admin)
+async def server_confirm(call: CallbackQuery, admin: Admin, lang: str) -> None:
+    if not await _programmer(call, admin, lang):
+        return
+    lang = admin_lang(lang)
+    action = call.data.rsplit(":", 1)[1]
+    text = (ta(lang, "srv_update_confirm", commits=commit_lines(version_info().get("commits", [])))
+            if action == "update" else ta(lang, "srv_restart_confirm"))
+    await swap_card(call.message, text, InlineKeyboardMarkup(inline_keyboard=[
+        [_b(ta(lang, f"btn_srv_yes_{action}"), f"adm:srv:do:{action}")], [_b(ta(lang, "btn_back"), "adm:srv")]]))
+    await call.answer()
+
+
+@router.callback_query(F.data.in_({"adm:srv:do:update", "adm:srv:do:restart", "adm:srv:backup", "adm:srv:check"}),
+                       is_admin)
+async def server_do(call: CallbackQuery, session: AsyncSession, admin: Admin, lang: str) -> None:
+    if not await _programmer(call, admin, lang):
+        return
+    lang = admin_lang(lang)
+    action = call.data.rsplit(":", 1)[1]
+    if not launcher_alive():
+        await call.answer(ta(lang, "srv_no_launcher").split(".")[0], show_alert=True)
+        return
+    if any(e.get("state") == "running" for e in control_log()):
+        await call.answer(ta(lang, "srv_busy_alert"), show_alert=True)
+        return
+    request_control(action, f"{admin.username} (Telegram)", notify=[call.message.chat.id])
+    await audit.bot_action(session, admin, f"/bot/server/{action}", f"Telegram › Server › {action}")
+    await call.answer(ta(lang, "srv_asked", action=ta(lang, f"srv_act_{action}")).replace("<b>", "").replace("</b>", ""))
+    await swap_card(call.message, ta(lang, "srv_asked", action=ta(lang, f"srv_act_{action}")),
+                    InlineKeyboardMarkup(inline_keyboard=[[_b(ta(lang, "btn_refresh"), "adm:srv"),
+                                                           _b(ta(lang, "btn_back"), "adm:home")]]))
 
 
 # ---------------------------------------------------------------- the card's buttons

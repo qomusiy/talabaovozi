@@ -484,6 +484,69 @@
     });
   }
 
+  // ---------- Server (programmer): state kept fresh, actions, logs ----------
+  // During a restart or an update this very web server stops for a moment: the page says so and keeps asking.
+  const svLive = document.getElementById("server-live");
+  if (svLive) {
+    let busy = !!svLive.querySelector(".sv-progress"), timer;
+    const refresh = async () => {
+      clearTimeout(timer);
+      try {
+        const r = await fetch(svLive.dataset.url, { headers: { Accept: "application/json" }, cache: "no-store" });
+        if (!r.ok) throw new Error(r.status);
+        const data = await r.json();
+        svLive.innerHTML = data.html;
+        svLive.classList.remove("offline");
+        busy = data.busy;
+      } catch (e) {
+        svLive.classList.add("offline");
+        if (!svLive.querySelector(".sv-offline")) {
+          svLive.insertAdjacentHTML("afterbegin", `<div class="flash info sv-offline sv-progress"><span class="spin"></span><span>${svLive.dataset.offline}</span></div>`);
+        }
+        busy = true;
+      }
+      timer = setTimeout(refresh, busy ? 3000 : 15000);
+    };
+    svLive.addEventListener("click", async (e) => {
+      const b = e.target.closest("[data-sv-action]");
+      if (!b || b.disabled) return;
+      if (b.dataset.confirm && !window.confirm(b.dataset.confirm)) return;
+      svLive.querySelectorAll("[data-sv-action]").forEach((x) => (x.disabled = true));
+      try {
+        const r = await fetch(svLive.dataset.action, { method: "POST", body: new URLSearchParams({ action: b.dataset.svAction }) });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.ok) window.alert(data.error || svLive.dataset.error);
+      } catch (err) { window.alert(svLive.dataset.error); }
+      setTimeout(refresh, 800);
+    });
+    timer = setTimeout(refresh, busy ? 3000 : 15000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+  }
+  const svLogs = document.getElementById("server-logs");
+  if (svLogs) {
+    const pre = svLogs.querySelector(".sv-log");
+    let name = (svLogs.querySelector("[data-log].on") || {}).dataset?.log || "server";
+    const load = async () => {
+      try {
+        const r = await fetch(`${svLogs.dataset.url}?name=${encodeURIComponent(name)}`, { cache: "no-store" });
+        const data = await r.json();
+        const atEnd = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
+        pre.textContent = data.lines.length ? data.lines.join("\n") : "—";
+        if (atEnd || !pre.dataset.loaded) pre.scrollTop = pre.scrollHeight;
+        pre.dataset.loaded = "1";
+      } catch (e) { /* the server is restarting: the next round shows it */ }
+    };
+    svLogs.querySelectorAll("[data-log]").forEach((b) => b.addEventListener("click", () => {
+      svLogs.querySelectorAll("[data-log]").forEach((x) => x.classList.toggle("on", x === b));
+      name = b.dataset.log;
+      delete pre.dataset.loaded;
+      load();
+    }));
+    svLogs.querySelector("[data-log-refresh]").addEventListener("click", load);
+    load();
+    setInterval(() => { if (!document.hidden) load(); }, 10000);
+  }
+
   // ---------- Suhbatlar (programmer): the bot's conversations, kept fresh while the page is open ----------
   const chatApp = document.getElementById("chat-app");
   if (chatApp) {

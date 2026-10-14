@@ -21,7 +21,9 @@ who actually teach them — and admins analyse the results in a web dashboard.
 
 The whole server is one program, the same on Linux and Windows: `python -m app.server` runs the web server (survey +
 dashboard), the Telegram bot and the public address, starts each again if it stops, and makes a database backup every
-night. A setup script installs everything and makes the server start with the computer, before anyone logs in:
+night. What the computer starts is a small launcher that runs the server and starts it again whenever it stops; it
+also updates it from GitHub safely when asked (see *Remote control*). A setup script installs everything and makes the
+server start with the computer, before anyone logs in:
 
 |                         | Linux (Ubuntu 24.04)                       | Windows 10 / 11                         |
 |-------------------------|--------------------------------------------|-----------------------------------------|
@@ -36,7 +38,7 @@ Both scripts take the same commands:
 scripts/server.sh status              # running? + the public address
 scripts/server.sh logs bot            # follow a log: server | web | bot | tunnel (Ctrl+C stops following)
 scripts/server.sh restart             # after changing .env
-scripts/server.sh update              # after pushing new code: git pull, new packages, restart
+scripts/server.sh update              # after pushing new code: backup, new version, checked - put back if it fails
 scripts/server.sh backup | backups | restore <file> | transfer | stop | start
 ```
 
@@ -78,9 +80,10 @@ git pull
 scripts\setup.bat
 ```
 
-It asks whether to replace that computer's data with the file's (`y`; a copy of the data that was there is saved to
-`data\backups` first) and keeps that computer's `.env` (its address settings). Without a transfer file — only new
-code — `scripts\server.bat update` is enough: it backs the database up, updates it and restarts.
+It shows what each one holds (people in the bot, real ratings and the newest of them, the bot's last message) and
+asks whether to replace that computer's data with the file's (`y`; a copy of the data that was there is saved to
+`data\backups` first, so nothing is lost for good) and keeps that computer's `.env` (its address settings). Without a
+transfer file — only new code — `scripts\server.bat update` is enough (or the dashboard's / the bot's Update button).
 
 **Linux (Ubuntu 24.04)**, as the user that will run it (with sudo rights):
 
@@ -126,10 +129,35 @@ internet — the *Admin saytini internetda ochish* switch on the Bot page (or `A
 it is at `<public address>/admin` too, e.g. on a phone. Online it is protected by the login
 (5 wrong passwords → 15 min block), SameSite cookies + an origin check on every form, and no-cache/no-frame headers.
 
+### Remote control
+
+The server computer can be looked after from anywhere, like a rented server with a hosting company's control panel —
+programmer accounts only:
+
+- **The dashboard's *Server* page** (Dasturchi › Server): whether the website, the bot and the public address run;
+  the version, and what is new on GitHub; buttons *Update*, *Restart*, *Back up now*, *Check for updates*; what was
+  done, by whom and how it went; the logs (server, web, bot, tunnel); the database copies to download; disk space
+  and the database's size. From another place it opens at `<public address>/admin/server` once the dashboard is
+  opened to the internet (Telegram bot page › *Admin saytini internetda ochish*; a permanent address: `TUNNEL=tailscale`).
+- **The bot**: admin menu › *🖥 Server* — the same state and buttons on the phone. The result of an action comes back as
+  a message, and programmer accounts with 🔔 *Server xabarlari* on hear once of each new version on GitHub.
+- **On the server computer**: `scripts\server.bat status | update | restart | logs` (Linux: `scripts/server.sh`).
+
+How an update works (`app/updater.py`, done by the launcher in `app/server.py`): it refuses if code files were changed
+on the server by hand, if GitHub's history doesn't continue the server's, or if that version was already tried and
+put back. Otherwise: a database copy → the new code (`git merge --ff-only`) → new packages if `requirements.txt`
+changed → a check that the new code loads and its database updates are in order (if not, straight back, nothing
+restarted) → the new version starts and must run healthy — website answering, the bot running, nothing restarting —
+for a minute, within 10 minutes. If it keeps stopping or isn't healthy in time, the launcher puts the previous version
+back by itself: the code, the packages, and — only if the new version had already changed it — the database from
+the copy made before (changes made in those minutes are lost). A restart of the computer in the middle of an update
+is picked up where it was. The launcher's own code takes effect with the next restart of the computer (or of the
+service/task: `scripts\server.bat restart`), so a broken update can never break the part that repairs it.
+
 ### Development
 
 `scripts/server.sh run` runs the same server in the terminal (Ctrl+C stops it); on Windows
-`.venv\Scripts\python -m app.server`. Only one server — and one bot — runs on a computer at a time (a second copy
+`.venv\Scripts\python -m app.server`. `TUNNEL=off` in the environment (or `.env`) runs it without a public address. Only one server — and one bot — runs on a computer at a time (a second copy
 refuses to start), so stop the service first: `scripts/server.sh stop`. A bot token also works in one place only:
 while the real server runs the bot elsewhere, `scripts/server.sh run --no-bot` runs everything but the bot.
 

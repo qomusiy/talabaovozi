@@ -1,0 +1,90 @@
+{# The parts of the Server page that change - rendered with the page and again every few seconds (admin.js). #}
+{% set L = live %}
+{% macro result(state) -%}
+{% if state == 'ok' %}<span class="badge good">{{ t('sv_r_ok') }}</span>
+{% elif state == 'running' %}<span class="badge neutral">{{ t('sv_r_running') }}</span>
+{% elif state == 'rolled_back' %}<span class="badge warn">{{ t('sv_r_rolled_back') }}</span>
+{% else %}<span class="badge bad">{{ t('sv_r_failed') }}</span>{% endif %}
+{%- endmacro %}
+{% if not L.alive %}<div class="flash bad">{{ icon('alert') }}<span>{{ t('sv_no_launcher') }}</span></div>
+{% elif L.active %}<div class="flash info sv-progress" role="status"><span class="spin" aria-hidden="true"></span><span><b>{{ t('sv_act_' ~ L.active.action) }}</b> — {{ t('sv_in_progress') }}{% if L.active.to %} <code>{{ L.active.from }} → {{ L.active.to }}</code>{% endif %}<br><small>{{ t('sv_wait_' ~ L.active.action) }}</small></span></div>{% endif %}
+
+<section class="kpis">
+  <div class="kpi"><div class="label">{{ t('sv_k_server') }}</div>
+    <div class="value"><span class="live {{ 'on' if L.running else 'off' }}"></span>{{ t('sv_running') if L.running else t('sv_stopped') }}</div>
+    <div class="foot">{{ t('sv_up_since', ago=L.started) if L.running else t('sv_stopped_foot') }}</div></div>
+  <div class="kpi"><div class="label">{{ t('sv_k_version') }}</div>
+    <div class="value small-value"><code>{{ L.current.short if L.current else '—' }}</code></div>
+    <div class="foot">{% if L.behind and not L.failed %}<span class="badge warn">{{ t('sv_behind', n=L.behind) }}</span>{% elif L.current %}{{ t('sv_newest') }}{% endif %}</div></div>
+  <div class="kpi"><div class="label">{{ t('bot_public') }}</div>
+    {% if L.tunnel_mode == 'off' %}<div class="value small-value">{{ t('sv_off') }}</div><div class="foot">TUNNEL=off</div>
+    {% else %}<div class="value"><span class="live {{ 'on' if L.tunnel == 'ok' else 'off' }}"></span>{{ t('tun_' ~ L.tunnel) }}</div>
+    <div class="foot sv-url">{{ L.url or '—' }}</div>{% endif %}</div>
+  {% set last = L.log[0] if L.log else none %}
+  <div class="kpi"><div class="label">{{ t('sv_k_last') }}</div>
+    <div class="value small-value">{{ t('sv_act_' ~ last.action) if last else '—' }}</div>
+    <div class="foot">{% if last %}{{ result(last.state) }} {{ last.finished_s if last.finished else last.at_s }}{% endif %}</div></div>
+</section>
+
+<section class="grid">
+  <div class="card span-7">
+    <div class="card-h"><div><h2>{{ t('sv_actions') }}</h2><div class="sub">{{ t('sv_actions_sub') }}</div></div></div>
+    {% set off = not L.alive or L.busy %}
+    <div class="sv-actions">
+      {% set can_update = L.behind and not L.failed and not L.ahead %}
+      <div class="sv-action"><button class="btn primary" type="button" data-sv-action="update" data-confirm="{{ t('sv_update_confirm') }}" {{ 'disabled' if off or not can_update }}>{{ icon('arrow_up_circle') }}{{ t('sv_act_update') }}</button>
+        <span class="hint">{{ t('sv_update_hint') }}</span></div>
+      <div class="sv-action"><button class="btn" type="button" data-sv-action="restart" data-confirm="{{ t('sv_restart_confirm') }}" {{ 'disabled' if off }}>{{ icon('power') }}{{ t('sv_act_restart') }}</button>
+        <span class="hint">{{ t('sv_restart_hint') }}</span></div>
+      <div class="sv-action"><button class="btn" type="button" data-sv-action="backup" {{ 'disabled' if off }}>{{ icon('database') }}{{ t('sv_act_backup') }}</button>
+        <span class="hint">{{ t('sv_backup_hint') }}</span></div>
+      <div class="sv-action"><button class="btn ghost" type="button" data-sv-action="check" {{ 'disabled' if off }}>{{ icon('refresh') }}{{ t('sv_act_check') }}</button>
+        <span class="hint">{{ t('sv_check_hint', ago=L.checked) }}</span></div>
+    </div>
+  </div>
+
+  <div class="card span-5">
+    <div class="card-h"><div><h2>{{ t('sv_version') }}</h2><div class="sub">{{ t('sv_version_sub') }}</div></div></div>
+    {% if L.current %}
+    <p class="sv-commit">{{ icon('commit') }}<code>{{ L.current.short }}</code> <span class="muted">{{ L.current.date[:10] }}</span><br><span>{{ L.current.subject }}</span></p>
+    {% endif %}
+    {% if L.check_error %}<div class="flash warn inline">{{ icon('alert') }}<span>{{ t('sv_check_error', e=L.check_error) }}</span></div>
+    {% elif L.ahead %}<div class="flash warn inline">{{ icon('alert') }}<span>{{ t('sv_ahead', n=L.ahead) }}</span></div>
+    {% elif L.failed %}<div class="flash warn inline">{{ icon('alert') }}<span>{{ t('sv_failed_version') }}</span></div>
+    {% elif L.behind %}
+      <p><b>{{ t('sv_new_on_github', n=L.behind) }}</b></p>
+      <ul class="sv-commits">{% for c in L.commits %}<li><code>{{ c.short }}</code> <span class="muted">{{ c.date[:10] }}</span> {{ c.subject }}</li>{% endfor %}</ul>
+    {% else %}<p class="muted">{{ icon('check') }} {{ t('sv_up_to_date') }}</p>{% endif %}
+    <p class="hint">{{ t('sv_checked', ago=L.checked) }}</p>
+  </div>
+</section>
+
+<section class="grid">
+  <div class="card span-8 flush">
+    <div class="card-h"><div><h2>{{ t('sv_history') }}</h2><div class="sub">{{ t('sv_history_sub') }}</div></div></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>{{ t('col_date') }}</th><th>{{ t('sv_col_action') }}</th><th class="sv-by">{{ t('sv_col_by') }}</th><th>{{ t('sv_col_result') }}</th></tr></thead>
+      <tbody>
+      {% for e in L.log %}
+        <tr><td class="num muted">{{ e.at_s }}</td>
+          <td class="wrap"><b>{{ t('sv_act_' ~ e.action) }}</b>{% if e.to %} <code class="muted">{{ e.from }} → {{ e.to }}</code>{% endif %}
+            {% if e.message and not (e.to and e.state == 'ok') %}<div class="sv-msg">{{ e.message }}</div>{% endif %}</td>
+          <td class="muted sv-by">{{ e.by }}</td><td>{{ result(e.state) }}</td></tr>
+      {% else %}<tr><td colspan="4" class="muted">{{ t('sv_history_none') }}</td></tr>{% endfor %}
+      </tbody>
+    </table></div>
+  </div>
+
+  <div class="card span-4">
+    <div class="card-h"><div><h2>{{ t('sv_parts') }}</h2><div class="sub">{{ t('sv_parts_sub') }}</div></div></div>
+    <ul class="sv-parts">
+      {% for p in L.parts %}
+      <li><span class="live {{ 'on' if p.running else 'off' }}"></span><b>{{ t('sv_part_' ~ p.name) }}</b>
+        <span class="muted">{{ t('sv_part_up', ago=p.since) if p.running else t('sv_stopped') }}{% if p.restarts %} · {{ t('sv_restarts', n=p.restarts) }}{% endif %}</span></li>
+      {% else %}<li class="muted">{{ t('sv_stopped_foot') }}</li>{% endfor %}
+      {% if L.tunnel_mode == 'off' %}<li class="muted">{{ t('sv_tunnel_off') }}</li>{% endif %}
+    </ul>
+    {% if L.alive and L.launcher_commit and L.current and L.launcher_commit != L.current.short %}
+    <p class="hint">{{ icon('info') }} {{ t('sv_launcher_old', v=L.launcher_commit) }}</p>{% endif %}
+  </div>
+</section>

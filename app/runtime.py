@@ -49,6 +49,63 @@ def request_tunnel_restart() -> None:
     TUNNEL_RESTART_FILE.write_text("1")
 
 
+# ---------------------------------------------------------------- remote control (app.launcher)
+# The dashboard's Server page, the bot and `server.sh/.bat update` ask the launcher for an action by writing one small
+# file into CONTROL_DIR; the launcher does it and writes what happened into CONTROL_LOG_FILE (newest first).
+CONTROL_DIR = ROOT / "data" / "runtime" / "control"
+CONTROL_LOG_FILE = ROOT / "data" / "runtime" / "control_log.json"
+VERSION_FILE = ROOT / "data" / "runtime" / "version.json"    # the code that runs, and what GitHub has (app.updater)
+LAUNCHER_FILE = ROOT / "data" / "runtime" / "launcher.json"  # the launcher's heartbeat (every few seconds)
+CONTROL_ACTIONS = ("restart", "update", "backup", "check")
+
+
+def _read_json(path: Path, default):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default
+
+
+def launcher_alive() -> bool:
+    """Is the launcher running (and so will it do what is asked)?"""
+    beat = _read_json(LAUNCHER_FILE, {})
+    return isinstance(beat, dict) and time.time() - beat.get("at", 0) < 20
+
+
+def request_control(action: str, by: str, notify: list[int] | None = None) -> str:
+    """Ask the launcher to restart / update / back up / check for updates; returns the request's id (its entry in
+    control_log() shows how it went). notify: Telegram chats the bot tells when it is done."""
+    if action not in CONTROL_ACTIONS:
+        raise ValueError(action)
+    CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+    rid = f"{time.time_ns()}-{os.getpid()}"
+    tmp = CONTROL_DIR / f"{rid}.tmp"
+    tmp.write_text(json.dumps({"id": rid, "action": action, "by": by[:100], "at": int(time.time()),
+                               "notify": notify or []}), encoding="utf-8")
+    os.replace(tmp, CONTROL_DIR / f"{rid}.json")  # the launcher only reads finished .json files
+    return rid
+
+
+def launcher_info() -> dict:
+    """The launcher's last heartbeat: {"pid", "at", "commit" (the version it started with), "busy"}."""
+    beat = _read_json(LAUNCHER_FILE, {})
+    return beat if isinstance(beat, dict) else {}
+
+
+def control_log() -> list[dict]:
+    """What the launcher did lately, newest first: [{"id", "action", "by", "at", "state": running / ok / failed /
+    rolled_back, "message", "finished", ...}]."""
+    log = _read_json(CONTROL_LOG_FILE, [])
+    return log if isinstance(log, list) else []
+
+
+def version_info() -> dict:
+    """{"current": {"commit", "short", "date", "subject"}, "behind": n, "commits": [...], "checked": unix time,
+    "error": text} - written by the launcher (app.updater)."""
+    info = _read_json(VERSION_FILE, {})
+    return info if isinstance(info, dict) else {}
+
+
 def webapp_url() -> str:
     """Public HTTPS base URL of the survey Mini App, or "" if there is none.
 

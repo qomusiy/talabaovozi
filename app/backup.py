@@ -124,6 +124,65 @@ def transfer() -> Path:
     return out
 
 
+# ---------------------------------------------------------------- what a copy holds (setup: replace or keep?)
+
+SUMMARY_TABLES = ("alembic_version", "admins", "students", "bot_users", "survey_campaigns", "feedback", "bot_messages")
+
+
+def _copy_rows(lines) -> dict[str, list[dict]]:
+    """The rows of the tables a summary needs, from pg_dump's text (COPY blocks), whatever the app's version."""
+    tables: dict[str, list[dict]] = {}
+    name = cols = None
+    for line in lines:
+        if name is None:
+            m = re.match(r"COPY public\.(\w+) \(([^)]*)\) FROM stdin;", line)
+            if m and m.group(1) in SUMMARY_TABLES:
+                name, cols = m.group(1), [c.strip().strip('"') for c in m.group(2).split(",")]
+                tables[name] = []
+        elif line.rstrip("\n") == "\\.":
+            name = None
+        else:
+            tables[name].append(dict(zip(cols, line.rstrip("\n").split("\t"))))
+    return tables
+
+
+def _local(stamp: str) -> str:
+    """pg_dump's "2026-10-12 10:29:12.5+00" in this computer's time: "2026-10-12 15:29"."""
+    if not stamp:
+        return ""
+    try:
+        return datetime.fromisoformat(re.sub(r"([+-]\d\d)$", r"\1:00", stamp)).astimezone().strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return stamp[:16]
+
+
+def summary(file: Path | None = None) -> dict:
+    """What a copy (or, without a file, this computer's database) holds: the app's database version, admin accounts,
+    people in the bot, real ratings (not demo) and the newest of them, and the bot's last message."""
+    if file:
+        with gzip.open(file, "rt", encoding="utf-8", errors="replace") as src:
+            tables = _copy_rows(src)
+    else:
+        pg_dump, env = pg_command("pg_dump")
+        out = subprocess.run([*pg_dump, "--data-only"], env=env, capture_output=True, check=True).stdout
+        tables = _copy_rows(out.decode("utf-8", "replace").splitlines(keepends=True))
+    demo = {c["id"] for c in tables.get("survey_campaigns", []) if c.get("is_demo") == "t"}
+    real = [f for f in tables.get("feedback", []) if f.get("campaign_id") not in demo]
+    people = ([u for u in tables["bot_users"] if not u.get("id", "").startswith("-")] if "bot_users" in tables
+              else [s for s in tables.get("students", []) if s.get("telegram_id") not in (None, "\\N")])
+    version = tables.get("alembic_version", [{}])
+    return {"version": (version[0].get("version_num") or "?")[:7] if version else "?",
+            "admins": len(tables.get("admins", [])), "people": len(people), "ratings": len(real),
+            "last_rating": _local(max((f.get("created_at", "") for f in real), default="")),
+            "last_message": _local(max((m.get("at", "") for m in tables.get("bot_messages", [])), default=""))}
+
+
+def describe(file: Path | None = None) -> str:
+    s = summary(file)
+    return (f"{s['people']} people in the bot, {s['ratings']} real ratings (newest {s['last_rating'] or '-'}), "
+            f"{s['admins']} admin accounts, last bot message {s['last_message'] or '-'} - database version {s['version']}")
+
+
 def main(argv: list[str]) -> None:
     command = argv[0] if argv else "now"
     if command == "now":
@@ -143,6 +202,8 @@ def main(argv: list[str]) -> None:
         print(f"ℹ️  The current data is saved first: {make().name}")
         restore(file)
         print(f"✅ Restored from {file}")
+    elif command == "describe":   # what a copy (or with no file: this computer's database) holds
+        print(describe(Path(argv[1]) if len(argv) > 1 else None))
     elif command == "transfer":
         out = transfer()
         print(f"✅ {out} - it holds the bot token, SECRET_KEY and all the data: copy it by USB, never to GitHub.")

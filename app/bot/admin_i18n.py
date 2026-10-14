@@ -192,6 +192,85 @@ TEXTS: dict[str, dict[str, str]] = {
               "👥 Участие: <b>{pct}%</b> ({participants} студентов)\n✅ Оценили всех: <b>{completed}</b>\n"
               "📊 Средний балл: <b>{overall}</b>",
     },
+    # 🖥 Server (programmer accounts): the server computer from anywhere (app.server.Launcher does the actions)
+    "btn_server": {"uz": "🖥 Server", "en": "🖥 Server", "ru": "🖥 Сервер"},
+    "srv_title": {"uz": "🖥 <b>Server</b> · {host}", "en": "🖥 <b>Server</b> · {host}", "ru": "🖥 <b>Сервер</b> · {host}"},
+    "srv_part_web": {"uz": "Sayt", "en": "Website", "ru": "Сайт"},
+    "srv_part_bot": {"uz": "Bot", "en": "Bot", "ru": "Бот"},
+    "srv_part_tunnel": {"uz": "Manzil", "en": "Address", "ru": "Адрес"},
+    "srv_started": {"uz": "⏱ Ishga tushgan: {at}", "en": "⏱ Started: {at}", "ru": "⏱ Запущен: {at}"},
+    "srv_down": {"uz": "🔴 Server ishlamayapti", "en": "🔴 The server is not running", "ru": "🔴 Сервер не работает"},
+    "srv_version": {"uz": "🔖 Versiya: <code>{short}</code> · {date}", "en": "🔖 Version: <code>{short}</code> · {date}",
+                    "ru": "🔖 Версия: <code>{short}</code> · {date}"},
+    "srv_behind": {"uz": "⬆️ GitHub’da yangi versiya: <b>{n}</b> ta o‘zgarish", "en": "⬆️ New on GitHub: <b>{n}</b> change(s)",
+                   "ru": "⬆️ Новое на GitHub: изменений <b>{n}</b>"},
+    "srv_newest": {"uz": "✅ Eng so‘nggi versiya", "en": "✅ The newest version", "ru": "✅ Последняя версия"},
+    "srv_failed": {"uz": "⚠️ GitHub’dagi so‘nggi versiya avval ishlamagan va qaytarilgan — tuzatilgani kutilmoqda",
+                   "en": "⚠️ GitHub's newest version didn't run before and was put back — waiting for a fixed one",
+                   "ru": "⚠️ Последняя версия с GitHub ранее не заработала и откатана — ждём исправленную"},
+    "srv_check_error": {"uz": "⚠️ GitHub tekshirilmadi: {e}", "en": "⚠️ GitHub not checked: {e}",
+                        "ru": "⚠️ GitHub не проверен: {e}"},
+    "srv_backup": {"uz": "💾 Oxirgi zaxira: {name}", "en": "💾 Last copy: {name}", "ru": "💾 Последняя копия: {name}"},
+    "srv_last": {"uz": "🕘 Oxirgi amal: {action} — {result} ({at})", "en": "🕘 Last action: {action} — {result} ({at})",
+                 "ru": "🕘 Последнее: {action} — {result} ({at})"},
+    "srv_busy": {"uz": "⏳ Hozir: <b>{action}</b> bajarilmoqda…", "en": "⏳ Now: <b>{action}</b> in progress…",
+                 "ru": "⏳ Сейчас выполняется: <b>{action}</b>…"},
+    "srv_no_launcher": {"uz": "⚠️ Server buyruqlarni bajara olmaydi (to‘xtagan yoki eski usulda ishga tushirilgan). "
+                              "Server kompyuterida: <code>scripts\\server.bat restart</code>",
+                        "en": "⚠️ The server can't carry out actions (stopped, or started the old way). On the server "
+                              "computer: <code>scripts\\server.bat restart</code>",
+                        "ru": "⚠️ Сервер не может выполнять команды (остановлен или запущен по-старому). На компьютере-"
+                              "сервере: <code>scripts\\server.bat restart</code>"},
+    "srv_act_update": {"uz": "Yangilash", "en": "Update", "ru": "Обновление"},
+    "srv_act_restart": {"uz": "Qayta ishga tushirish", "en": "Restart", "ru": "Перезапуск"},
+    "srv_act_backup": {"uz": "Zaxira nusxa", "en": "Backup", "ru": "Резервная копия"},
+    "srv_act_check": {"uz": "Yangilanishni tekshirish", "en": "Update check", "ru": "Проверка обновлений"},
+    "srv_r_ok": {"uz": "✅ bajarildi", "en": "✅ done", "ru": "✅ выполнено"},
+    "srv_r_failed": {"uz": "❌ bajarilmadi", "en": "❌ failed", "ru": "❌ не выполнено"},
+    "srv_r_rolled_back": {"uz": "↩️ yangi versiya ishlamadi — eski versiya o‘zi qaytarildi",
+                          "en": "↩️ the new version didn't run — the previous one was put back",
+                          "ru": "↩️ новая версия не заработала — прежняя возвращена"},
+    "srv_r_running": {"uz": "⏳ bajarilmoqda", "en": "⏳ in progress", "ru": "⏳ выполняется"},
+    "btn_srv_update": {"uz": "⬆️ Yangi versiyani o‘rnatish", "en": "⬆️ Install the new version",
+                       "ru": "⬆️ Установить новую версию"},
+    "btn_srv_restart": {"uz": "🔁 Qayta ishga tushirish", "en": "🔁 Restart", "ru": "🔁 Перезапустить"},
+    "btn_srv_backup": {"uz": "💾 Zaxira nusxa", "en": "💾 Back up", "ru": "💾 Копия"},
+    "btn_srv_check": {"uz": "🔍 Tekshirish", "en": "🔍 Check", "ru": "🔍 Проверить"},
+    "btn_srv_yes_update": {"uz": "✅ Ha, o‘rnatish", "en": "✅ Yes, install", "ru": "✅ Да, установить"},
+    "btn_srv_yes_restart": {"uz": "✅ Ha, qayta ishga tushirish", "en": "✅ Yes, restart", "ru": "✅ Да, перезапустить"},
+    "srv_update_confirm": {
+        "uz": "⬆️ <b>Yangi versiyani o‘rnatasizmi?</b>\n\n{commits}\n\nAvval zaxira nusxa olinadi, so‘ng yangi versiya bir "
+              "necha daqiqa tekshiriladi. To‘g‘ri ishlamasa, eski versiya (kerak bo‘lsa, ma’lumotlar bazasi ham) o‘zi "
+              "qaytariladi. Bot bir lahza javob bermasligi mumkin — natija shu yerga keladi.",
+        "en": "⬆️ <b>Install the new version?</b>\n\n{commits}\n\nA database copy is made first, then the new version is "
+              "checked for a few minutes. If it doesn't run properly, the previous version (and, if needed, the "
+              "database) is put back by itself. The bot may not answer for a moment — the result comes here.",
+        "ru": "⬆️ <b>Установить новую версию?</b>\n\n{commits}\n\nСначала делается копия базы, затем новая версия "
+              "проверяется несколько минут. Если она не заработает, прежняя версия (и при необходимости база) вернётся "
+              "сама. Бот может ненадолго замолчать — результат придёт сюда.",
+    },
+    "srv_restart_confirm": {
+        "uz": "🔁 <b>Qayta ishga tushirasizmi?</b>\n\nSayt, bot va manzil bir necha soniya ishlamaydi. Natija shu yerga keladi.",
+        "en": "🔁 <b>Restart?</b>\n\nThe website, the bot and the address stop for a few seconds. The result comes here.",
+        "ru": "🔁 <b>Перезапустить?</b>\n\nСайт, бот и адрес остановятся на несколько секунд. Результат придёт сюда.",
+    },
+    "srv_asked": {"uz": "⏳ <b>{action}</b> boshlandi. Tugagach, natija shu yerga keladi.",
+                  "en": "⏳ <b>{action}</b> started. The result comes here when it's done.",
+                  "ru": "⏳ <b>{action}</b>: начато. Результат придёт сюда."},
+    "srv_busy_alert": {"uz": "Boshqa amal bajarilmoqda — tugashini kuting.", "en": "Another action is in progress — wait.",
+                       "ru": "Выполняется другое действие — подождите."},
+    "srv_programmer_only": {"uz": "Bu faqat dasturchi uchun.", "en": "For the programmer account only.",
+                            "ru": "Только для аккаунта программиста."},
+    "srv_result": {"uz": "🖥 <b>{action}</b>: {result}\n{message}", "en": "🖥 <b>{action}</b>: {result}\n{message}",
+                   "ru": "🖥 <b>{action}</b>: {result}\n{message}"},
+    "srv_new_version": {
+        "uz": "⬆️ <b>GitHub’da yangi versiya</b>\n\n{commits}\n\nO‘rnatish uchun quyidagi tugmani bosing (avval zaxira "
+              "nusxa olinadi; ishlamasa, eski versiya o‘zi qaytariladi).",
+        "en": "⬆️ <b>A new version on GitHub</b>\n\n{commits}\n\nTap the button below to install it (a copy is made "
+              "first; if it doesn't run, the previous version is put back by itself).",
+        "ru": "⬆️ <b>Новая версия на GitHub</b>\n\n{commits}\n\nНажмите кнопку ниже, чтобы установить (сначала делается "
+              "копия; если не заработает, прежняя версия вернётся сама).",
+    },
     "super_only": {"uz": "Bu faqat superadminlar uchun.", "en": "Superadmins only.", "ru": "Только для суперадминов."},
     "cmd_admin": {"uz": "Admin menyusi", "en": "Admin menu", "ru": "Меню админа"},
     "cmd_link": {"uz": "Sayt manzili", "en": "Site address", "ru": "Адрес сайта"},

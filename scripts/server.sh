@@ -6,7 +6,8 @@
 #   scripts/server.sh logs [name]       follow a log: server (default) | web | bot | tunnel   (Ctrl+C to stop)
 #   scripts/server.sh restart           after changing .env
 #   scripts/server.sh stop | start
-#   scripts/server.sh update            git pull, new packages, restart (the database is updated when it starts)
+#   scripts/server.sh update            the newest version from GitHub: a backup first, then the new version is
+#                                       checked - if it doesn't run properly, the previous one is put back by itself
 #   scripts/server.sh backup            a database copy now (one is made every night at 03:30 by itself)
 #   scripts/server.sh backups           the copies (data/backups)
 #   scripts/server.sh restore <file>    put a copy back - replaces ALL data
@@ -47,10 +48,16 @@ case "${1:-status}" in
   start) need_service; systemctl --user start talaba; wait_started ;;
   stop) need_service; systemctl --user stop talaba; echo "⏹  Stopped. It starts again with the computer, or: scripts/server.sh start" ;;
   restart) need_service; systemctl --user restart talaba; wait_started ;;
-  update)
-    git pull --ff-only
-    $PY -m pip install -q --disable-pip-version-check -r requirements.txt
-    if installed; then systemctl --user restart talaba; wait_started; fi ;;
+  update)   # the running server does it (app.server.Launcher); if it doesn't run: the plain way
+    rc=0; $PY -m app.server update || rc=$?
+    if [ $rc -eq 2 ]; then
+      echo "The server is not running - updating the plain way"
+      git pull --ff-only
+      $PY -m pip install -q --disable-pip-version-check -r requirements.txt
+      if installed; then systemctl --user restart talaba; wait_started; fi
+    else
+      show_status; exit $rc
+    fi ;;
   logs) tail -n 60 -F "data/runtime/logs/${2:-server}.log" ;;
   backup) $PY -m app.backup now ;;
   backups) $PY -m app.backup list ;;

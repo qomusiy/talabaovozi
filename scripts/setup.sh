@@ -69,8 +69,13 @@ if [ -n "$BUNDLE" ]; then
   tar -xzf "$BUNDLE" -C "$tmp"
   [ -f "$tmp/.env" ] || { echo "❌ $BUNDLE is not a transfer file (there is no .env in it)"; exit 1; }
   replace=
-  if ! db_empty; then   # set up before: this computer has data of its own
-    read -r -p "This computer's database already has data. Replace it with the data from $(basename "$BUNDLE")? (a copy of it is saved first) [y/N] " answer
+  dump=$(ls -1 "$tmp"/data/backups/feedback-*.sql.gz | head -1)
+  if ! db_empty; then   # set up before: this computer has data of its own - show both, then ask
+    echo "⚠️  This computer's database already has data. What each one holds:"
+    echo "   this computer:  $(.venv/bin/python -m app.backup describe 2>&1)"
+    echo "   the file:       $(.venv/bin/python -m app.backup describe "$dump" 2>&1)"
+    echo "Replace this computer's data with the file's? A copy of this computer's data is saved first (data/backups),"
+    read -r -p "so nothing is lost for good. [y/N] " answer
     case "$answer" in [yY]*|ha|Ha) replace=1 ;; esac
   fi
   if db_empty || [ -n "$replace" ]; then
@@ -83,7 +88,6 @@ if [ -n "$BUNDLE" ]; then
       fi
       cp "$tmp/.env" .env
     fi
-    dump=$(ls -1 "$tmp"/data/backups/feedback-*.sql.gz | head -1)
     mkdir -p data/backups && cp "$dump" data/backups/
     .venv/bin/python -c 'import sys; from pathlib import Path; from app import backup; backup.restore(Path(sys.argv[1]))' \
       "$dump"
