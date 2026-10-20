@@ -1,8 +1,13 @@
 """Values that change while the app runs (not configuration)."""
+import asyncio
 import json
 import os
+import socket
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
+
+import httpx
 
 from app.config import get_settings
 
@@ -118,6 +123,34 @@ def webapp_url() -> str:
         return WEBAPP_URL_FILE.read_text().strip().rstrip("/")
     except OSError:
         return ""
+
+
+async def address_check(url: str, timeout: float = 15) -> tuple[int, str]:
+    """Does the public address answer, asked from this computer: (HTTP status of {url}/healthz or 0, how it was
+    asked - "direct", "edge" or why not). This network's DNS may not know a brand-new quick address yet, or know it
+    only as IPv6 the network doesn't route - the site works for everyone else, only this computer can't see it. Then
+    it is asked through Cloudflare's IPv4 edge (api.trycloudflare.com's address: Cloudflare answers for every
+    address it serves there), so a working tunnel is never taken for a dead one."""
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        try:
+            return (await client.get(f"{url}/healthz")).status_code, "direct"
+        except httpx.HTTPError as e:
+            why = str(e) or type(e).__name__
+        host = urlsplit(url).hostname or ""
+        if not host.endswith(".trycloudflare.com"):
+            return 0, why
+        try:
+            found = await asyncio.get_running_loop().getaddrinfo("api.trycloudflare.com", 443, family=socket.AF_INET,
+                                                                  type=socket.SOCK_STREAM)
+            r = await client.get(f"https://{found[0][4][0]}/healthz", headers={"Host": host},
+                                 extensions={"sni_hostname": host})
+            return r.status_code, "edge"
+        except (OSError, httpx.HTTPError) as e:
+            return 0, f"{why}; via Cloudflare's IPv4 edge: {str(e) or type(e).__name__}"
+
+
+async def address_answers(url: str) -> bool:
+    return bool(url) and (await address_check(url))[0] == 200
 
 
 # Files the dashboard uploads: the picture on the bot's menu card, photos/videos of messages to students.

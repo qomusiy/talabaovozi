@@ -2,7 +2,9 @@
 the site's addresses, details, a Mini App with charts, and switches - server status messages (app.bot.server_alerts)
 and the daily report, both off until switched on. Other users never see any of it; viewers see the numbers,
 superadmins can also ask for a new public address, the programmer account has 🖥 Server: the server computer from
-anywhere - its state, update from GitHub, restart, backup (the launcher does them, app.server.Launcher)."""
+anywhere - its state, update from GitHub, restart, backup (the launcher does them, app.server.Launcher), and
+🩺 Diagnostics: why the site doesn't open, checked on the server computer (app.diagnose), with its logs."""
+import asyncio
 import platform
 from contextlib import suppress
 from datetime import datetime
@@ -11,11 +13,11 @@ from html import escape
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
-from aiogram.types import (BotCommand, BotCommandScopeChat, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
-                           Message, WebAppInfo)
+from aiogram.types import (BotCommand, BotCommandScopeChat, BufferedInputFile, CallbackQuery, InlineKeyboardButton,
+                           InlineKeyboardMarkup, Message, WebAppInfo)
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import audit, settings_store
+from app import audit, diagnose, settings_store
 from app.bot import server_alerts
 from app.bot.admin_i18n import ta
 from app.bot.cards import send_card, swap_card
@@ -184,7 +186,10 @@ def server_card(lang: str) -> tuple[str, InlineKeyboardMarkup]:
     st, info, log = server_status(), version_info(), control_log()
     lines = [ta(lang, "srv_title", host=escape(platform.node())), ""]
     if st:
-        parts = [("🟢 " if c.get("running") else "🔴 ") + ta(lang, f"srv_part_{name}")
+        cloudflared = st.get("cloudflared") or {}
+        parts = [ta(lang, "srv_tunnel_waiting") if name == "tunnel" and c.get("running")
+                 and cloudflared.get("connected") is False else
+                 ("🟢 " if c.get("running") else "🔴 ") + ta(lang, f"srv_part_{name}")
                  for name, c in (st.get("children") or {}).items() if name in ("web", "bot", "tunnel")]
         lines += [" · ".join(parts), ta(lang, "srv_started", at=_when(st.get("started")))]
     else:
@@ -216,7 +221,9 @@ def server_card(lang: str) -> tuple[str, InlineKeyboardMarkup]:
         if info.get("behind") and not info.get("failed") and not info.get("ahead"):
             rows.append([_b(ta(lang, "btn_srv_update"), "adm:srv:update")])
         rows += [[_b(ta(lang, "btn_srv_restart"), "adm:srv:restart"), _b(ta(lang, "btn_srv_backup"), "adm:srv:backup")],
-                 [_b(ta(lang, "btn_srv_check"), "adm:srv:check")]]
+                 [_b(ta(lang, "btn_srv_check"), "adm:srv:check"), _b(ta(lang, "btn_srv_diag"), "adm:srv:diag")]]
+    else:  # diagnostics need no launcher: the bot runs them itself
+        rows.append([_b(ta(lang, "btn_srv_diag"), "adm:srv:diag")])
     rows.append([_b(ta(lang, "btn_refresh"), "adm:srv"), _b(ta(lang, "btn_back"), "adm:home")])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -267,6 +274,59 @@ async def server_do(call: CallbackQuery, session: AsyncSession, admin: Admin, la
     await swap_card(call.message, ta(lang, "srv_asked", action=ta(lang, f"srv_act_{action}")),
                     InlineKeyboardMarkup(inline_keyboard=[[_b(ta(lang, "btn_refresh"), "adm:srv"),
                                                            _b(ta(lang, "btn_back"), "adm:home")]]))
+
+
+def diag_text(lang: str, r: dict) -> str:
+    mark = {True: "✅", False: "❌", None: "➖"}
+    lines = [ta(lang, "dg_title", host=escape(platform.node()), time=_when(r["at"])), ""]
+    lines += [f"{mark[c['ok']]} {ta(lang, 'dg_' + c['name'])}: <code>{escape(str(c['detail']))}</code>"
+              for c in r["checks"]]
+    t = r["tunnel"]
+    if t["mode"] in diagnose.CLOUDFLARE:
+        lines += ["", ta(lang, "dg_tunnel", mode=escape(t["mode"]), version=escape(str(t["version"] or "?")))]
+        if t["connected_now"] is not None:
+            lines.append(ta(lang, "dg_now_on", protocol=t["protocol"]) if t["connected_now"] else
+                         ta(lang, "dg_now_off", protocol=t["protocol"], misses=t["misses"]))
+        if t["restarts"]:
+            lines.append(ta(lang, "dg_restarts", n=t["restarts"]))
+        lines.append(ta(lang, "dg_last_connected", at=escape(t["connected"]) or ta(lang, "dg_never")))
+        if t["precheck"]:
+            lines.append(ta(lang, "dg_precheck"))
+            lines += [f"{mark[p['ok']]} {escape(name)}: {escape(p['details'])}" for name, p in t["precheck"].items()]
+        if t["errors"]:
+            lines += [ta(lang, "dg_errors"), "<pre>" + escape("\n".join(t["errors"])) + "</pre>"]
+    lines += ["", ta(lang, "dg_verdict", text=ta(lang, f"dg_v_{r['verdict']}"))]
+    text = "\n".join(lines)
+    if len(text) > 4000:  # Telegram's limit is 4096: the errors are in the log file anyway
+        text = "\n".join(line for line in lines if not line.startswith("<pre>"))
+    return text
+
+
+_diagnosing: set[int] = set()  # chats waiting for diagnostics (a second tap doesn't start them twice)
+
+
+@router.callback_query(F.data == "adm:srv:diag", is_admin)
+async def server_diag(call: CallbackQuery, session: AsyncSession, admin: Admin, lang: str) -> None:
+    if not await _programmer(call, admin, lang):
+        return
+    lang, chat_id = admin_lang(lang), call.message.chat.id
+    await call.answer(ta(lang, "dg_running"))
+    if chat_id in _diagnosing:
+        return
+    _diagnosing.add(chat_id)
+    try:
+        report = await diagnose.report()
+        await audit.bot_action(session, admin, "/bot/server/diagnose", "Telegram › Server › diagnose")
+        host, now = platform.node(), datetime.now(TASHKENT)
+        logs = await asyncio.to_thread(diagnose.logs_text)
+        with suppress(TelegramAPIError):
+            await call.message.bot.send_document(chat_id, BufferedInputFile(
+                logs.encode("utf-8"), filename=f"logs-{host}-{now:%Y%m%d-%H%M}.txt"),
+                caption=ta(lang, "dg_logs", host=escape(host), time=f"{now:%d.%m %H:%M}"))
+        await swap_card(call.message, diag_text(lang, report), InlineKeyboardMarkup(inline_keyboard=[
+            [_b(ta(lang, "btn_dg_again"), "adm:srv:diag")], [_b(ta(lang, "btn_back"), "adm:srv")]]))
+    finally:
+        _diagnosing.discard(chat_id)
 
 
 # ---------------------------------------------------------------- the card's buttons

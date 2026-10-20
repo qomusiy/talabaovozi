@@ -3,6 +3,7 @@
 # It is the systemd service "talaba", set up by scripts/setup.sh, and starts whenever the computer does.
 #
 #   scripts/server.sh status            is it running? + the public address
+#   scripts/server.sh diagnose [--logs] the site doesn't open? checks the network, Cloudflare and the tunnel
 #   scripts/server.sh logs [name]       follow a log: server (default) | web | bot | tunnel   (Ctrl+C to stop)
 #   scripts/server.sh restart           after changing .env
 #   scripts/server.sh stop | start
@@ -59,6 +60,7 @@ case "${1:-status}" in
       show_status; exit $rc
     fi ;;
   logs) tail -n 60 -F "data/runtime/logs/${2:-server}.log" ;;
+  diagnose) $PY -m app.diagnose "${@:2}" ;;
   backup) $PY -m app.backup now ;;
   backups) $PY -m app.backup list ;;
   transfer)

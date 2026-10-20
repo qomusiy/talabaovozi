@@ -120,7 +120,11 @@ change it later, edit `.env` and run the setup again.
 
 The server watches the address: if Cloudflare deletes a quick tunnel or the address stops answering for ~4 minutes,
 it starts the tunnel again — a quick tunnel gets a new address (the bot moves its Telegram buttons there by itself and
-tells the admins who switched on its server messages), a fixed one reconnects to the same address. The dashboard's
+tells the admins who switched on its server messages), a fixed one reconnects to the same address. A new quick
+address is handed out only once cloudflared has connected to Cloudflare. cloudflared that doesn't connect within
+90 s is started again over the other protocol (`http2` = TCP 7844, `quic` = UDP 7844 — a network may close one),
+the tries further and further apart (up to 10 minutes). The server checks its own address through Cloudflare's IPv4
+edge when this network's DNS doesn't know a brand-new address yet, so a working tunnel is not taken for a dead one. The dashboard's
 Bot page shows whether the address works and (quick tunnel only) has a
 *Yangi manzil olish* (new address) button.
 
@@ -141,7 +145,13 @@ programmer accounts only:
   opened to the internet (Telegram bot page › *Admin saytini internetda ochish*; a permanent address: `TUNNEL=tailscale`).
 - **The bot**: admin menu › *🖥 Server* — the same state and buttons on the phone. The result of an action comes back as
   a message, and programmer accounts with 🔔 *Server xabarlari* on hear once of each new version on GitHub.
-- **On the server computer**: `scripts\server.bat status | update | restart | logs` (Linux: `scripts/server.sh`).
+- **🩺 Diagnostika** (in the bot's *🖥 Server*; works even when the site doesn't): why the site doesn't open, checked on
+  the server computer itself — the web server, the internet, DNS, Cloudflare's address service and its tunnel port 7844,
+  the clock, the public address — cloudflared's own connectivity check and latest errors, and a verdict
+  (e.g. *the network blocks port 7844*). The logs (server, tunnel, bot, web) come with it as a file, without the bot
+  or tunnel token. `app/diagnose.py`.
+- **On the server computer**: `scripts\server.bat status | diagnose | update | restart | logs`
+  (Linux: `scripts/server.sh`).
 
 How an update works (`app/updater.py`, done by the launcher in `app/server.py`): it refuses if code files were changed
 on the server by hand, if GitHub's history doesn't continue the server's, or if that version was already tried and

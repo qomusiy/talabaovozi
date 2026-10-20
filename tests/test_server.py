@@ -48,6 +48,9 @@ def test_quick_tunnel_address_is_published_and_replaced_when_cloudflare_drops_it
     tunnel = server.Tunnel("quick")
     tunnel.started()
     tunnel.on_line("INF |  https://two-calm-words.trycloudflare.com                    |")
+    assert not (tmp_path / "webapp_url").exists()                     # not handed out before it is connected
+    tunnel.on_line("INF Registered tunnel connection connIndex=0 connection=abc event=0 ip=198.41.200.193 "
+                   "location=waw06 protocol=http2")
     assert (tmp_path / "webapp_url").read_text() == "https://two-calm-words.trycloudflare.com"
 
     stopped = []

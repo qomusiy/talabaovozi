@@ -539,3 +539,37 @@ async def test_server_card_for_the_programmer_and_results_told_once(chat, sessio
     assert len(sent) == 2 and "kept stopping" in sent[0] and "Faster bot" in sent[1]
     await server_alerts.tell_results(chat.bot)
     assert len(calls_of(chat, "SendMessage")) == before + 2
+
+
+async def test_diagnostics_from_the_bot_with_the_logs(chat, session, world, runtime_files, monkeypatch):
+    """🩺 works without the launcher too (the bot checks by itself): a verdict, the checks, and the logs as a file."""
+    import json
+    import time
+
+    import app.runtime
+    from app import diagnose
+    await make_admin(session, username="dev", telegram_id=777, role="programmer")
+    app.runtime.SERVER_STATUS_FILE.write_text(json.dumps({
+        "at": int(time.time()), "started": 1, "children": {"tunnel": {"running": True, "since": 1, "restarts": 7}},
+        "cloudflared": {"connected": False, "protocol": "quic", "misses": 3}}))
+    await chat.send("/admin")
+    out = await chat.press("adm:srv", photo=True)
+    assert "🟡" in out[-1] and "adm:srv:diag" in str(chat.last_markup())    # the address is connecting
+    report = {"verdict": "port_blocked", "at": int(time.time()), "checks": [
+        {"name": "internet", "ok": True, "detail": "80 ms · UZ"},
+        {"name": "edge1", "ok": False, "detail": "region1.v2.argotunnel.com: no answer in 10 s"}],
+        "tunnel": {"mode": "quick", "version": "2026.9.3", "connected_now": False, "protocol": "quic", "misses": 3,
+                   "restarts": 7, "connected": "", "precheck": {"TCP Connectivity": {"ok": False, "details": "blocked"}},
+                   "errors": ["20.10 21:16 ERR dial tcp 198.41.192.7:7844: i/o timeout <x>"]}}
+
+    async def fake_report():
+        return report
+    monkeypatch.setattr(diagnose, "report", fake_report)
+    monkeypatch.setattr(diagnose, "logs_text", lambda: "===== tunnel.log =====\nERR i/o timeout\n")
+    out = await chat.press("adm:srv:diag", photo=True)
+    [doc] = calls_of(chat, "SendDocument")
+    assert doc.document.filename.startswith("logs-") and doc.document.filename.endswith(".txt")
+    text = out[-1]
+    assert "7844" in text and "✅ Internet" in text and "❌ Cloudflare 7844-port (1)" in text and "&lt;x&gt;" in text
+    assert "quic" in text and "to‘sib qo‘ygan" in text                                  # the verdict, in Uzbek
+    assert [b.callback_data for row in chat.last_markup().inline_keyboard for b in row] == ["adm:srv:diag", "adm:srv"]

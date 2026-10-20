@@ -36,16 +36,21 @@ from app import backup, updater
 from app.config import get_settings
 from app.runtime import (CONTROL_ACTIONS, CONTROL_DIR, CONTROL_LOG_FILE, LAUNCHER_FILE, ROOT, SERVER_SCRIPT,
                          SERVER_STATUS_FILE, SETUP_SCRIPT, TUNNEL_RESTART_FILE, TUNNEL_STATUS_FILE, WEBAPP_URL_FILE,
-                         control_log, launcher_alive, request_control, tunnel_status, version_info)
+                         address_check, control_log, launcher_alive, request_control, tunnel_status,
+                         version_info)
 
 LOGS = ROOT / "data" / "runtime" / "logs"
 STATUS_FILE = SERVER_STATUS_FILE   # written every 10 s: `status`, and the bot's server messages to admins
 STARTED = int(time.time())
 LOCK_PORT = 47801        # held while the server runs, so a second copy refuses to start
-CHECK_EVERY = 60         # seconds between checks of the public address
+ADDRESS_CHECK_EVERY = 60  # seconds between checks of the public address
 MAX_FAILS = 4            # failed checks in a row before the tunnel is started again
 BACKUP_AT = (3, 30)      # nightly backup, caught up after the computer was off
-QUICK_URL = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+# a quick tunnel's address: words with hyphens - not api.trycloudflare.com, which cloudflared names when it fails
+QUICK_URL = re.compile(r"https://(?!api\.)[a-z0-9]+(?:-[a-z0-9]+)+\.trycloudflare\.com")
+CONNECTED = re.compile(r"Registered tunnel connection|Connection [0-9a-f-]+ registered")  # cloudflared's words
+PROTOCOLS = ("http2", "quic")  # how cloudflared reaches Cloudflare: TCP 7844 first, UDP 7844 if that never connects
+CONNECT_WITHIN = 90      # seconds for cloudflared to connect before it is started again
 
 
 def say(text: str) -> None:
@@ -108,11 +113,13 @@ def die_with_me() -> None:
 
 class Child:
     """A program kept running: started again 5 s after it stops (up to a minute if it keeps stopping right away,
-    e.g. a wrong bot token). Its output goes to data/runtime/logs/<name>.log."""
+    e.g. a wrong bot token). Its output goes to data/runtime/logs/<name>.log.
+    command: the program and its arguments - or a function that gives them, asked before every start;
+    on_exit(exit code): may ask for a longer pause (seconds) before the next start."""
 
-    def __init__(self, name: str, command: list[str], env: dict | None = None, on_line=None, on_start=None):
+    def __init__(self, name: str, command, env: dict | None = None, on_line=None, on_start=None, on_exit=None):
         self.name, self.command, self.env = name, command, env or child_env()
-        self.on_line, self.on_start = on_line, on_start
+        self.on_line, self.on_start, self.on_exit = on_line, on_start, on_exit
         self.proc: asyncio.subprocess.Process | None = None
         self.since = 0.0
         self.restarts = -1
@@ -131,14 +138,15 @@ class Child:
         delay = 5
         while True:
             log = open_log(self.name)
+            command = self.command() if callable(self.command) else self.command
             try:
                 self.proc = await asyncio.create_subprocess_exec(
-                    *self.command, cwd=ROOT, env=self.env, stdout=asyncio.subprocess.PIPE,
+                    *command, cwd=ROOT, env=self.env, stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT, limit=1 << 20)
             except OSError as e:
                 log.close()
                 hint = f" - is it installed? {SETUP_SCRIPT} installs it" if isinstance(e, FileNotFoundError) else ""
-                say(f"❌ {self.name}: cannot start {self.command[0]} ({e}) - trying again in 60 s{hint}")
+                say(f"❌ {self.name}: cannot start {command[0]} ({e}) - trying again in 60 s{hint}")
                 await asyncio.sleep(60)
                 continue
             self.since, self.restarts = time.time(), self.restarts + 1
@@ -157,6 +165,11 @@ class Child:
                             say(f"❌ {self.name}: {e!r}")
             code = await self.proc.wait()
             delay = 5 if time.time() - self.since > 120 else min(delay * 2, 60)
+            if self.on_exit:
+                try:
+                    delay = max(delay, self.on_exit(code) or 0)
+                except Exception as e:  # never stop keeping the program running
+                    say(f"❌ {self.name}: {e!r}")
             say(f"⏹  {self.name} stopped (exit code {code}) - starting again in {delay} s")
             await asyncio.sleep(delay)
 
@@ -192,46 +205,80 @@ class Tunnel:
     tailscale   Tailscale Funnel, https://talaba-ovozi.<tailnet>.ts.net - the same address forever
     cloudflare  a Cloudflare named tunnel on your own domain (CLOUDFLARE_TUNNEL_TOKEN, WEBAPP_URL) - the same forever
     off         no public address (trying things on a computer that isn't the server)
+
+    A quick address is handed out (the bot, the dashboard) only once cloudflared has connected to Cloudflare - an
+    address it never connects is dead. cloudflared that doesn't connect is started again with the other protocol
+    (http2 = TCP 7844, quic = UDP 7844: a network may close one of them), the tries further and further apart.
     """
 
     def __init__(self, mode: str):
         self.mode = mode or "quick"
         self.url, self.fails, self.since, self.last_check = "", 0, time.time(), 0.0
+        self.connected, self.misses, self.proto = False, 0, 0  # proto: PROTOCOLS index - the one that last worked
         self.child: Child | None = None
-        cloudflared = str(ROOT / "tools" / ("cloudflared.exe" if os.name == "nt" else "cloudflared"))
-        port = get_settings().web_port
+        self.cloudflared = str(ROOT / "tools" / ("cloudflared.exe" if os.name == "nt" else "cloudflared"))
         if self.mode == "quick":
-            self.child = Child("tunnel", [cloudflared, "tunnel", "--no-autoupdate", "--protocol", "http2",
-                                          "--url", f"http://127.0.0.1:{port}"],
-                               on_line=self.on_line, on_start=self.started)
+            self.child = Child("tunnel", self.command, on_line=self.on_line, on_start=self.started,
+                               on_exit=self.ended)
         elif self.mode == "cloudflare":
             token, self.url = get_settings().cloudflare_tunnel_token, get_settings().webapp_url.rstrip("/")
             if not token or not self.url:
                 say("❌ TUNNEL=cloudflare needs CLOUDFLARE_TUNNEL_TOKEN and WEBAPP_URL in .env")
             # The token goes in the environment, not the command line (which every user of the computer can read).
-            self.child = Child("tunnel", [cloudflared, "tunnel", "--no-autoupdate", "--protocol", "http2", "run"],
-                               env=child_env(TUNNEL_TOKEN=token), on_start=self.started)
+            self.child = Child("tunnel", self.command, env=child_env(TUNNEL_TOKEN=token), on_line=self.on_line,
+                               on_start=self.started, on_exit=self.ended)
         elif self.mode not in ("tailscale", "off"):
             say(f"❌ Unknown TUNNEL={self.mode} in .env (quick | tailscale | cloudflare | off)")
+
+    @property
+    def protocol(self) -> str:
+        return PROTOCOLS[self.proto]
+
+    def command(self) -> list[str]:
+        args = [self.cloudflared, "tunnel", "--no-autoupdate", "--protocol", self.protocol]
+        return args + (["--url", f"http://127.0.0.1:{get_settings().web_port}"] if self.mode == "quick" else ["run"])
 
     def status(self, state: str, fails: int = 0) -> None:
         TUNNEL_STATUS_FILE.write_text(f"{state}|{fails}|{int(time.time())}")
 
     def started(self) -> None:
-        self.since, self.fails = time.time(), 0
+        self.since, self.fails, self.connected = time.time(), 0, False
         self.status("starting")
         if self.mode == "quick":
-            self.url = ""  # the address file keeps the old one until the new one is known
+            self.url = ""  # the address file keeps the old one until the new tunnel is connected
         elif self.url:
             write_url(self.url)
 
     def on_line(self, line: str) -> None:
-        if not self.url and (m := QUICK_URL.search(line)):
+        if self.mode == "quick" and not self.url and (m := QUICK_URL.search(line)):
             self.url = m.group(0)
-            write_url(self.url)
-        elif self.url and "Tunnel not found" in line:
+            say(f"🔗 Quick address {self.url} - connecting to Cloudflare ({self.protocol})")
+        elif not self.connected and CONNECTED.search(line):
+            self.connect()
+        elif self.mode == "quick" and self.url and "Tunnel not found" in line:
             say("❌ Cloudflare deleted this quick tunnel - starting a new one (new address)")
             self.restart()
+
+    def connect(self) -> None:
+        """cloudflared reached Cloudflare: the address works - from now on it is handed out."""
+        self.connected, self.misses = True, 0
+        say(f"✅ Tunnel connected to Cloudflare ({self.protocol})")
+        if self.mode == "quick" and self.url:
+            write_url(self.url)
+
+    def ended(self, code: int) -> int:
+        """cloudflared stopped. If it never connected this time, the next start uses the other protocol, after a
+        pause that grows (each quick try is a new address, and Cloudflare limits how many it hands out)."""
+        if self.connected:
+            return 0
+        self.misses += 1
+        tried, self.proto = self.protocol, (self.proto + 1) % len(PROTOCOLS)
+        wait = 0 if self.misses < 2 else min(60 * 2 ** (self.misses - 2), 600)  # 0, 1, 2, 4, 8, 10 min
+        say(f"❌ The tunnel did not connect to Cloudflare over {tried} (try {self.misses}) - next over {self.protocol}"
+            + (f" in {wait // 60} min" if wait else "") + ". Port 7844 closed on this network? "
+            "Diagnostics: the bot's 🖥 Server › 🩺, or python -m app.diagnose")
+        self.status("down", MAX_FAILS)
+        return wait
 
     def tailscale_up(self) -> None:
         """Turn Funnel on (tailscaled keeps it, this repairs a reset) and read this computer's address."""
@@ -270,25 +317,28 @@ class Tunnel:
                 say("🔁 New address requested from the dashboard")
                 self.restart()
                 continue
-            if not self.url:
-                if self.mode == "quick" and now - self.since > 90 and self.child.running:
-                    say("❌ No public address after 90 s (no internet, or Cloudflare refused) - trying again")
+            if self.child:  # cloudflared
+                if not self.child.running:
+                    continue  # between two starts: Child starts it again after its pause
+                if not self.connected and now - self.since > CONNECT_WITHIN:
+                    say(f"❌ {'Not connected to Cloudflare' if self.url else 'No public address'} after "
+                        f"{CONNECT_WITHIN} s - starting the tunnel again")
                     self.since = now
                     self.restart()
-                elif self.mode == "tailscale" and now - self.since > 60:
+                    continue
+            elif not self.url:  # Tailscale
+                if self.mode == "tailscale" and now - self.since > 60:
                     await asyncio.to_thread(self.tailscale_up)
                 continue
-            if now - self.since < 60 or now - self.last_check < CHECK_EVERY:
+            if not self.url or now - self.since < 60 or now - self.last_check < ADDRESS_CHECK_EVERY:
                 continue
             self.last_check = now
-            try:
-                async with httpx.AsyncClient(timeout=20) as client:
-                    code = (await client.get(f"{self.url}/healthz")).status_code
-            except httpx.HTTPError:
-                code = 0
+            code, _ = await address_check(self.url, timeout=20)
             if code == 200:
                 self.fails = 0
                 self.status("ok")
+                if self.child and not self.connected:  # it answers, so it is connected (whatever cloudflared said)
+                    self.connect()
                 continue
             self.fails += 1
             self.status("down", self.fails)
@@ -324,6 +374,8 @@ async def write_status(children: list[Child], tunnel: Tunnel) -> None:
             "at": int(time.time()), "started": STARTED, "pid": os.getpid(), "tunnel_mode": tunnel.mode,
             "run": os.environ.get("TALABA_RUN", ""),  # which start of the launcher's this is (Launcher.health)
             "url": tunnel.url,
+            "cloudflared": ({"connected": tunnel.connected, "protocol": tunnel.protocol, "misses": tunnel.misses}
+                            if tunnel.child else None),
             "children": {c.name: {"running": c.running, "since": int(c.since), "restarts": max(c.restarts, 0)}
                          for c in children},
         }))

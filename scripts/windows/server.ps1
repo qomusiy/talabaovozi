@@ -2,6 +2,7 @@
   Talaba Ovozi on Windows - manage the server. Run it with scripts\server.bat:
 
     scripts\server.bat status            is it running? + the public address
+    scripts\server.bat diagnose          the site doesn't open? checks the network, Cloudflare and the tunnel
     scripts\server.bat logs [name]       follow a log: server (default) | web | bot | tunnel   (Ctrl+C to stop)
     scripts\server.bat restart           after changing .env (code updates: update)
     scripts\server.bat stop | start
@@ -120,6 +121,7 @@ switch ($Command) {
         $name = if ($Arg) { $Arg } else { "server" }
         Get-Content "$Runtime\logs\$name.log" -Tail 60 -Wait -Encoding UTF8
     }
+    "diagnose" { & $VenvPy -X utf8 -m app.diagnose }
     "backup" { & $VenvPy -X utf8 -m app.backup now }
     "backups" { & $VenvPy -X utf8 -m app.backup list }
     "transfer" { & $VenvPy -X utf8 -m app.backup transfer }
@@ -130,6 +132,6 @@ switch ($Command) {
         Start-ScheduledTask -TaskName $TaskName
         Wait-Started; Show-Status
     }
-    default { Get-Content $PSCommandPath | Select-Object -Skip 1 -First 15 }
+    default { Get-Content $PSCommandPath | Select-Object -Skip 1 -First 16 }
 }
 if ($Elevated) { Write-Host ""; Read-Host "Press Enter to close" | Out-Null }

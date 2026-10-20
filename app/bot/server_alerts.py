@@ -16,7 +16,6 @@ from datetime import datetime
 from html import escape
 from zoneinfo import ZoneInfo
 
-import httpx
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
@@ -28,7 +27,7 @@ from app.bot.admin_i18n import ta
 from app.config import get_settings
 from app.db import session_scope
 from app.models import Admin, BotUser
-from app.runtime import ROOT, control_log, server_status, version_info, webapp_url
+from app.runtime import ROOT, address_answers, control_log, server_status, version_info, webapp_url
 from app.services.survey import active_campaign
 
 log = logging.getLogger("bot")
@@ -50,13 +49,7 @@ async def targets(session) -> dict[int, str]:
 
 
 async def site_answers(url: str) -> bool:
-    if not url:
-        return False
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            return (await client.get(f"{url}/healthz")).status_code == 200
-    except httpx.HTTPError:
-        return False
+    return await address_answers(url)
 
 
 async def facts(state: dict) -> dict:
