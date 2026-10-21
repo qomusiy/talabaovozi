@@ -282,7 +282,9 @@ def diag_text(lang: str, r: dict) -> str:
     lines += [f"{mark[c['ok']]} {ta(lang, 'dg_' + c['name'])}: <code>{escape(str(c['detail']))}</code>"
               for c in r["checks"]]
     t = r["tunnel"]
-    if t["mode"] in diagnose.CLOUDFLARE:
+    if t.get("backup_on"):
+        lines += ["", ta(lang, "dg_backup", url=escape(t["backup_url"] or "…"))]
+    if t["mode"] in diagnose.CLOUDFLARE or t["mode"] == "tailscale":
         lines += ["", ta(lang, "dg_tunnel", mode=escape(t["mode"]), version=escape(str(t["version"] or "?")))]
         if t["connected_now"] is not None:
             lines.append(ta(lang, "dg_now_on", protocol=t["protocol"]) if t["connected_now"] else

@@ -153,6 +153,29 @@ programmer accounts only:
 - **On the server computer**: `scripts\server.bat status | diagnose | update | restart | logs`
   (Linux: `scripts/server.sh`).
 
+#### Remote access (from anywhere, nobody at the computer)
+
+Independent ways in, so one being down never locks you out — all reached through **Tailscale** (a free private
+network of your own devices: the server gets a fixed address `100.x.y.z` that only devices signed in to the same
+Tailscale account can reach), except the bot and RustDesk:
+
+| Way | What | Needs |
+|---|---|---|
+| Telegram bot › 🖥 Server | update, restart, backup, 🩺 diagnostics + logs | Telegram, a *Dasturchi* account linked |
+| Dashboard `http://100.x.y.z:8000/admin` | everything in the dashboard | `WEB_HOST=0.0.0.0`, Tailscale |
+| `ssh <windows user>@100.x.y.z` | a full PowerShell: `scripts\server.bat …`, git, logs, restart | Windows OpenSSH server, Tailscale |
+| RustDesk (unattended, permanent password) | the screen | RustDesk service |
+
+The dashboard over Tailscale opens only for connections that arrive on the server's own Tailscale address and not
+through a proxy (`app/web/deps.py: is_tailnet_request`); the survey's public address never gets it (unless the
+dashboard is opened to the internet). On Windows, port 8000 and the SSH port are opened in the firewall for Tailscale
+addresses (`100.64.0.0/10`) only.
+
+The survey's address with `TUNNEL=tailscale` is permanent (Funnel), and with `TUNNEL_BACKUP=true` (default) a
+Cloudflare quick tunnel is started when it stops answering (2 checks) and handed out once connected; after it answers
+twice in a row again, students are moved back and the quick tunnel stops. The server checks the Funnel address as the
+internet sees it (public DNS, not Tailscale's own), so it doesn't fool itself.
+
 How an update works (`app/updater.py`, done by the launcher in `app/server.py`): it refuses if code files were changed
 on the server by hand, if GitHub's history doesn't continue the server's, or if that version was already tried and
 put back. Otherwise: a database copy → the new code (`git merge --ff-only`) → new packages if `requirements.txt`

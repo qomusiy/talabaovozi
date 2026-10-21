@@ -285,31 +285,45 @@ if ($mode -eq "cloudflare") {
         Set-EnvValue "WEBAPP_URL" (Read-Host "Its address, e.g. https://ovoz.example.uz").Trim().TrimEnd("/")
     }
 }
-if ($mode -eq "quick" -or $mode -eq "cloudflare") {
+# TUNNEL=tailscale keeps cloudflared too: a quick tunnel takes over while its address doesn't answer (TUNNEL_BACKUP)
+$backup = ($mode -eq "tailscale") -and ((Get-EnvValue "TUNNEL_BACKUP") -ne "false")
+if ($mode -eq "quick" -or $mode -eq "cloudflare" -or $backup) {
     if (-not (Test-Path "$Root\tools\cloudflared.exe")) {
         New-Item -ItemType Directory -Force "$Root\tools" | Out-Null
         Download "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" "$Root\tools\cloudflared.exe"
     }
     Ok "cloudflared (TUNNEL=$mode)"
-} elseif ($mode -eq "tailscale") {
+}
+if ($mode -eq "tailscale") {
+    # With the backup, a Tailscale problem is not the end: students get the Cloudflare address meanwhile.
+    function TsProblem([string]$t) {
+        if ($backup) { Write-Host "WARNING: $t - students get the backup address until it works; run the setup again" -ForegroundColor Yellow }
+        else { Fail $t }
+    }
     $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
     if (-not (Test-Path $ts)) {
         Write-Host "Installing Tailscale..."
         & winget.exe install -e --id Tailscale.Tailscale --source winget --accept-package-agreements --accept-source-agreements --silent
-        if (-not (Test-Path $ts)) { Fail "Tailscale did not install (see above)" }
         Start-Sleep -Seconds 5
     }
-    & $ts status *> $null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "Sign in to Tailscale: open the link below (Ctrl+click) and sign in - Google, GitHub or Microsoft."
-        & $ts up --unattended --hostname=talaba-ovozi --accept-dns=false
-        if ($LASTEXITCODE -ne 0) { Fail "Tailscale sign-in did not finish (see above)" }
+    if (-not (Test-Path $ts)) { TsProblem "Tailscale did not install (see above)" }
+    else {
+        & $ts status *> $null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Sign in to Tailscale: open the link below (Ctrl+click) and sign in - Google, GitHub or Microsoft."
+            Write-Host "Use the same account on your phone and laptop: that is what lets them reach this computer."
+            & $ts up --unattended --hostname=talaba-ovozi --accept-dns=false
+        }
+        & $ts status *> $null
+        if ($LASTEXITCODE -ne 0) { TsProblem "Tailscale sign-in did not finish (see above)" }
+        else {
+            Write-Host "Turning on Funnel (the public address). If a link appears, open it, allow Funnel, and wait here."
+            & $ts funnel --bg 8000
+            if ($LASTEXITCODE -ne 0) { TsProblem "Tailscale Funnel did not turn on (see above)" }
+            else { Ok "Tailscale Funnel (TUNNEL=tailscale): $(& $ts ip -4 | Select-Object -First 1)" }
+        }
     }
-    Write-Host "Turning on Funnel (the public address). If a link appears, open it, allow Funnel, and wait here."
-    & $ts funnel --bg 8000
-    if ($LASTEXITCODE -ne 0) { Fail "Tailscale Funnel did not turn on (see above)" }
-    Ok "Tailscale Funnel (TUNNEL=tailscale)"
-} else {
+} elseif ($mode -ne "quick" -and $mode -ne "cloudflare") {
     Fail "TUNNEL=$mode in .env - use quick, tailscale or cloudflare"
 }
 

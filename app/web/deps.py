@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.db import session_scope
 from app.models import Admin, BotUser
+from app.runtime import tailnet_ips
 from app.services import users
 from app.web.telegram_auth import verify_init_data
 
@@ -21,6 +22,17 @@ def is_local_request(request: Request) -> bool:
     """True only for requests made directly on this computer - not through a tunnel or proxy."""
     host = request.headers.get("host", "").split(":")[0]
     return host in LOCAL_HOSTS and not any(h in request.headers for h in PROXY_HEADERS)
+
+
+async def is_tailnet_request(request: Request) -> bool:
+    """True for a request from one of your own devices over Tailscale (WEB_HOST=0.0.0.0): the connection came in on
+    this computer's Tailscale address - which only the devices of its Tailscale account can reach - and not through
+    a proxy (Funnel and the tunnels connect from 127.0.0.1). Decided by where the connection arrived, which a
+    visitor can't fake with a header."""
+    server = request.scope.get("server") or ("",)
+    if not server[0] or server[0].startswith("127.") or any(h in request.headers for h in PROXY_HEADERS):
+        return False
+    return server[0] in await tailnet_ips()
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:

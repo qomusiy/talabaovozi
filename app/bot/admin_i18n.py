@@ -287,6 +287,10 @@ TEXTS: dict[str, dict[str, str]] = {
                "ru": "Выдача адресов (trycloudflare)"},
     "dg_edge1": {"uz": "Cloudflare 7844-port (1)", "en": "Cloudflare port 7844 (1)", "ru": "Cloudflare порт 7844 (1)"},
     "dg_edge2": {"uz": "Cloudflare 7844-port (2)", "en": "Cloudflare port 7844 (2)", "ru": "Cloudflare порт 7844 (2)"},
+    "dg_tailscale": {"uz": "Tailscale (doimiy manzil)", "en": "Tailscale (permanent address)",
+                     "ru": "Tailscale (постоянный адрес)"},
+    "dg_backup": {"uz": "🛟 Zaxira manzil ishlatilmoqda: {url}", "en": "🛟 The backup address is in use: {url}",
+                  "ru": "🛟 Используется запасной адрес: {url}"},
     "dg_clock": {"uz": "Kompyuter soati", "en": "Computer clock", "ru": "Часы компьютера"},
     "dg_public": {"uz": "Sayt internetda", "en": "Site on the internet", "ru": "Сайт в интернете"},
     "dg_tunnel": {"uz": "🔌 <b>Tunnel</b> · TUNNEL={mode} · cloudflared {version}",
@@ -332,6 +336,16 @@ TEXTS: dict[str, dict[str, str]] = {
     "dg_v_clock": {"uz": "kompyuter soati noto‘g‘ri — Windows: Sozlamalar › Vaqt › «Vaqtni avtomatik o‘rnatish».",
                    "en": "the computer’s clock is wrong — Windows: Settings › Time › “Set time automatically”.",
                    "ru": "часы компьютера неверны — Windows: Параметры › Время › «Устанавливать время автоматически»."},
+    "dg_v_tailscale": {"uz": "server kompyuterida Tailscale ishlamayapti yoki hisobdan chiqib ketgan — kompyuterda "
+                             "scripts\\setup.bat ni ishga tushiring.",
+                       "en": "Tailscale isn’t running or is signed out on the server — run scripts\\setup.bat there.",
+                       "ru": "Tailscale на сервере не работает или вышел из аккаунта — запустите там scripts\\setup.bat."},
+    "dg_v_funnel": {"uz": "Tailscale ishlayapti, lekin uning ommaviy manzili javob bermayapti (Funnel o‘chiqmi?). "
+                          "Talabalar shu vaqtda zaxira manzilni oladi.",
+                    "en": "Tailscale runs, but its public address doesn’t answer (Funnel off?). Students get the backup "
+                          "address meanwhile.",
+                    "ru": "Tailscale работает, но его публичный адрес не отвечает (Funnel выключен?). Студенты пока "
+                          "получают запасной адрес."},
     "dg_v_api": {"uz": "api.trycloudflare.com javob bermayapti — Cloudflare hozir yangi manzil bermayapti; "
                        "server o‘zi qayta urinadi.",
                  "en": "api.trycloudflare.com doesn’t answer — Cloudflare hands out no new addresses right now; "

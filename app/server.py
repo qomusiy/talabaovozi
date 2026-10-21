@@ -36,8 +36,8 @@ from app import backup, updater
 from app.config import get_settings
 from app.runtime import (CONTROL_ACTIONS, CONTROL_DIR, CONTROL_LOG_FILE, LAUNCHER_FILE, ROOT, SERVER_SCRIPT,
                          SERVER_STATUS_FILE, SETUP_SCRIPT, TUNNEL_RESTART_FILE, TUNNEL_STATUS_FILE, WEBAPP_URL_FILE,
-                         address_check, control_log, launcher_alive, request_control, tunnel_status,
-                         version_info)
+                         address_check, control_log, launcher_alive, request_control, tailscale_exe, tailscale_info,
+                         tunnel_status, version_info, webapp_url)
 
 LOGS = ROOT / "data" / "runtime" / "logs"
 STATUS_FILE = SERVER_STATUS_FILE   # written every 10 s: `status`, and the bot's server messages to admins
@@ -51,6 +51,8 @@ QUICK_URL = re.compile(r"https://(?!api\.)[a-z0-9]+(?:-[a-z0-9]+)+\.trycloudflar
 CONNECTED = re.compile(r"Registered tunnel connection|Connection [0-9a-f-]+ registered")  # cloudflared's words
 PROTOCOLS = ("http2", "quic")  # how cloudflared reaches Cloudflare: TCP 7844 first, UDP 7844 if that never connects
 CONNECT_WITHIN = 90      # seconds for cloudflared to connect before it is started again
+BACKUP_AFTER = 2         # failed checks of the Tailscale address before students get the backup tunnel
+BACK_AFTER = 2           # checks in a row it answers again before they are moved back to it
 
 
 def say(text: str) -> None:
@@ -209,6 +211,10 @@ class Tunnel:
     A quick address is handed out (the bot, the dashboard) only once cloudflared has connected to Cloudflare - an
     address it never connects is dead. cloudflared that doesn't connect is started again with the other protocol
     (http2 = TCP 7844, quic = UDP 7844: a network may close one of them), the tries further and further apart.
+
+    TUNNEL=tailscale has a backup (TUNNEL_BACKUP, on by default): when its address stops answering, a Cloudflare quick
+    tunnel is started and handed out once connected; when the Tailscale address answers again, students are moved
+    back to it and the quick tunnel stops. The bot always gives whichever address works.
     """
 
     def __init__(self, mode: str):
@@ -216,6 +222,8 @@ class Tunnel:
         self.url, self.fails, self.since, self.last_check = "", 0, time.time(), 0.0
         self.connected, self.misses, self.proto = False, 0, 0  # proto: PROTOCOLS index - the one that last worked
         self.child: Child | None = None
+        self.backup: Tunnel | None = None   # TUNNEL=tailscale: the quick tunnel used while its address is down
+        self.backup_on, self.backup_tasks, self.good = False, [], 0
         self.cloudflared = str(ROOT / "tools" / ("cloudflared.exe" if os.name == "nt" else "cloudflared"))
         if self.mode == "quick":
             self.child = Child("tunnel", self.command, on_line=self.on_line, on_start=self.started,
@@ -227,7 +235,10 @@ class Tunnel:
             # The token goes in the environment, not the command line (which every user of the computer can read).
             self.child = Child("tunnel", self.command, env=child_env(TUNNEL_TOKEN=token), on_line=self.on_line,
                                on_start=self.started, on_exit=self.ended)
-        elif self.mode not in ("tailscale", "off"):
+        elif self.mode == "tailscale":
+            if get_settings().tunnel_backup and Path(self.cloudflared).exists():
+                self.backup = Tunnel("quick")
+        elif self.mode != "off":
             say(f"❌ Unknown TUNNEL={self.mode} in .env (quick | tailscale | cloudflare | off)")
 
     @property
@@ -246,7 +257,7 @@ class Tunnel:
         self.status("starting")
         if self.mode == "quick":
             self.url = ""  # the address file keeps the old one until the new tunnel is connected
-        elif self.url:
+        elif self.url and not self.backup_on:
             write_url(self.url)
 
     def on_line(self, line: str) -> None:
@@ -282,8 +293,7 @@ class Tunnel:
 
     def tailscale_up(self) -> None:
         """Turn Funnel on (tailscaled keeps it, this repairs a reset) and read this computer's address."""
-        exe = shutil.which("tailscale") or os.path.join(os.environ.get("ProgramFiles", ""), "Tailscale",
-                                                         "tailscale.exe")
+        exe = tailscale_exe()
         self.started()
         try:
             subprocess.run([exe, "funnel", "--bg", str(get_settings().web_port)], capture_output=True, timeout=30)
@@ -292,10 +302,30 @@ class Tunnel:
         try:
             info = json.loads(subprocess.run([exe, "status", "--json"], capture_output=True, timeout=30).stdout)
             self.url = "https://" + info["Self"]["DNSName"].rstrip(".")
-            write_url(self.url)
+            if not self.backup_on:
+                write_url(self.url)
         except (OSError, subprocess.SubprocessError, ValueError, KeyError) as e:
             say(f"❌ Tailscale: {e} - is it installed and logged in? ({SETUP_SCRIPT})")
-            self.status("down", MAX_FAILS)
+            if not self.backup_on:
+                self.status("down", MAX_FAILS)
+
+    def use_backup(self, why: str) -> None:
+        """Students get a Cloudflare quick tunnel until the Tailscale address answers again."""
+        if not self.backup or self.backup_on:
+            return
+        say(f"🛟 {why} - starting the backup address (a Cloudflare quick tunnel); students get it once it connects")
+        self.backup_on, self.good = True, 0
+        self.backup_tasks = [asyncio.create_task(forever("backup tunnel", self.backup.child.keep_running)),
+                             asyncio.create_task(forever("backup tunnel watch", self.backup.watch))]
+
+    def stop_backup(self) -> None:
+        for task in self.backup_tasks:
+            task.cancel()  # the quick tunnel stops with it (Child.keep_running)
+        self.backup_tasks, self.backup_on = [], False
+        self.backup.url, self.backup.connected = "", False
+        write_url(self.url)
+        self.status("ok")
+        say(f"✅ The Tailscale address answers again - students are back on {self.url}; backup tunnel stopped")
 
     def restart(self) -> None:
         self.status("starting")
@@ -328,6 +358,7 @@ class Tunnel:
                     continue
             elif not self.url:  # Tailscale
                 if self.mode == "tailscale" and now - self.since > 60:
+                    self.use_backup("Tailscale gives no address")
                     await asyncio.to_thread(self.tailscale_up)
                 continue
             if not self.url or now - self.since < 60 or now - self.last_check < ADDRESS_CHECK_EVERY:
@@ -336,17 +367,29 @@ class Tunnel:
             code, _ = await address_check(self.url, timeout=20)
             if code == 200:
                 self.fails = 0
+                if self.backup_on:
+                    self.good += 1
+                    if self.good >= BACK_AFTER:
+                        self.stop_backup()
+                    continue
                 self.status("ok")
                 if self.child and not self.connected:  # it answers, so it is connected (whatever cloudflared said)
                     self.connect()
                 continue
-            self.fails += 1
-            self.status("down", self.fails)
-            say(f"⚠️  Public address not answering ({code}), check {self.fails}/{MAX_FAILS}")
+            self.fails, self.good = self.fails + 1, 0
+            if not self.backup_on:  # while the backup carries the students, its own state is the address's
+                self.status("down", self.fails)
+            say(f"⚠️  Public address {self.url} not answering ({code}), check {self.fails}/{MAX_FAILS}")
+            if self.fails >= BACKUP_AFTER:
+                self.use_backup("The Tailscale address doesn't answer")
             if self.fails >= MAX_FAILS:
                 say("❌ The public address is dead - " + ("starting a new tunnel (new address)" if self.mode == "quick"
                                                          else "reconnecting (same address)"))
-                self.restart()
+                if self.child:
+                    self.restart()
+                else:
+                    self.fails = 0  # Tailscale: turn Funnel on again, then 4 more checks before the next try
+                    await asyncio.to_thread(self.tailscale_up)
 
 
 def backup_due(now: datetime, last: datetime | None) -> bool:
@@ -374,10 +417,11 @@ async def write_status(children: list[Child], tunnel: Tunnel) -> None:
             "at": int(time.time()), "started": STARTED, "pid": os.getpid(), "tunnel_mode": tunnel.mode,
             "run": os.environ.get("TALABA_RUN", ""),  # which start of the launcher's this is (Launcher.health)
             "url": tunnel.url,
-            "cloudflared": ({"connected": tunnel.connected, "protocol": tunnel.protocol, "misses": tunnel.misses}
-                            if tunnel.child else None),
+            "cloudflared": ({"connected": cf.connected, "protocol": cf.protocol, "misses": cf.misses}
+                            if (cf := tunnel.backup if tunnel.backup_on else tunnel).child else None),
+            "backup": {"on": tunnel.backup_on, "url": tunnel.backup.url} if tunnel.backup else None,
             "children": {c.name: {"running": c.running, "since": int(c.since), "restarts": max(c.restarts, 0)}
-                         for c in children},
+                         for c in children + ([tunnel.backup.child] if tunnel.backup_on else [])},
         }))
         await asyncio.sleep(10)
 
@@ -762,9 +806,12 @@ def show_status() -> None:
                 print(f"  ✅ {name:8} running for {int((now - c['since']) / 60)} min (restarts: {c['restarts']})")
             else:
                 print(f"  ❌ {name:8} NOT running - see: {SERVER_SCRIPT} logs {name}")
+        backup_url = (status.get("backup") or {}).get("url") if (status.get("backup") or {}).get("on") else ""
         if status["url"]:
             print(f"  🌐 address  {status['url']}   (last check: {tunnel_status()['state']})")
-            print(f"  📝 survey   {status['url']}/survey   (students open it from the bot)")
+            if backup_url:
+                print(f"  🛟 backup   {backup_url}   (students get this one until the address above answers again)")
+            print(f"  📝 survey   {webapp_url() or status['url']}/survey   (students open it from the bot)")
         elif status.get("tunnel_mode") == "off":
             print("  ⏸  address  none (TUNNEL=off in .env)")
         else:
@@ -772,6 +819,8 @@ def show_status() -> None:
     else:
         print(f"  ❌ server   NOT running - {SERVER_SCRIPT} start")
     print(f"  📊 admin    http://127.0.0.1:{get_settings().web_port}/admin   (on this computer)")
+    if get_settings().web_host == "0.0.0.0" and (ts := tailscale_info())["ips"]:
+        print(f"  🔒 admin    http://{ts['ips'][0]}:{get_settings().web_port}/admin   (from your devices, over Tailscale)")
     last = backup.newest()
     print(f"  💾 backup   {last.name if last else 'none yet'}")
     info = version_info()

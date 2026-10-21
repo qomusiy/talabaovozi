@@ -2,7 +2,9 @@
 import asyncio
 import json
 import os
+import shutil
 import socket
+import subprocess
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -125,32 +127,93 @@ def webapp_url() -> str:
         return ""
 
 
+DOH = ("https://1.1.1.1/dns-query?name={}&type=A", "https://8.8.8.8/resolve?name={}&type=A")  # public DNS over HTTPS
+
+
+async def _public_ipv4(client: httpx.AsyncClient, host: str) -> str | None:
+    """The address the internet sees for `host` - asked from public DNS, not this computer's (which may be
+    Tailscale's own and point back at this computer)."""
+    for url in DOH:
+        try:
+            answers = (await client.get(url.format(host), headers={"accept": "application/dns-json"})).json()
+            return next(a["data"] for a in answers.get("Answer", []) if a.get("type") == 1)
+        except (httpx.HTTPError, ValueError, KeyError, StopIteration, AttributeError):
+            continue
+    return None
+
+
+async def _through(client: httpx.AsyncClient, ip: str, host: str) -> int:
+    return (await client.get(f"https://{ip}/healthz", headers={"Host": host},
+                             extensions={"sni_hostname": host})).status_code
+
+
 async def address_check(url: str, timeout: float = 15) -> tuple[int, str]:
     """Does the public address answer, asked from this computer: (HTTP status of {url}/healthz or 0, how it was
-    asked - "direct", "edge" or why not). This network's DNS may not know a brand-new quick address yet, or know it
-    only as IPv6 the network doesn't route - the site works for everyone else, only this computer can't see it. Then
-    it is asked through Cloudflare's IPv4 edge (api.trycloudflare.com's address: Cloudflare answers for every
-    address it serves there), so a working tunnel is never taken for a dead one."""
+    asked - "direct", "edge", "public" or why not).
+    - A quick address: this network's DNS may not know a brand-new one yet, or know it only as IPv6 the network
+      doesn't route - the site works for everyone else, only this computer can't see it. Then it is asked through
+      Cloudflare's IPv4 edge (Cloudflare answers for every address it serves there), so a working tunnel is never
+      taken for a dead one.
+    - A Tailscale address (….ts.net): this computer's own DNS may be Tailscale's, which points back at this
+      computer and would say yes even when the internet can't get in - so it is asked the way the internet asks:
+      the address from public DNS, through Tailscale's Funnel servers."""
+    host = urlsplit(url).hostname or ""
     async with httpx.AsyncClient(timeout=timeout) as client:
+        why = ""
+        if host.endswith(".ts.net"):
+            try:
+                if ip := await _public_ipv4(client, host):
+                    return await _through(client, ip, host), "public"
+                why = "public DNS doesn't know it"
+            except httpx.HTTPError as e:
+                why = str(e) or type(e).__name__
         try:
             return (await client.get(f"{url}/healthz")).status_code, "direct"
         except httpx.HTTPError as e:
-            why = str(e) or type(e).__name__
-        host = urlsplit(url).hostname or ""
+            why = "; ".join(x for x in (why, str(e) or type(e).__name__) if x)
         if not host.endswith(".trycloudflare.com"):
             return 0, why
         try:
             found = await asyncio.get_running_loop().getaddrinfo("api.trycloudflare.com", 443, family=socket.AF_INET,
                                                                   type=socket.SOCK_STREAM)
-            r = await client.get(f"https://{found[0][4][0]}/healthz", headers={"Host": host},
-                                 extensions={"sni_hostname": host})
-            return r.status_code, "edge"
+            return await _through(client, found[0][4][0], host), "edge"
         except (OSError, httpx.HTTPError) as e:
             return 0, f"{why}; via Cloudflare's IPv4 edge: {str(e) or type(e).__name__}"
 
 
 async def address_answers(url: str) -> bool:
     return bool(url) and (await address_check(url))[0] == 200
+
+
+def tailscale_exe() -> str:
+    found = shutil.which("tailscale")
+    if found:
+        return found
+    exe = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Tailscale" / "tailscale.exe"
+    return str(exe) if os.name == "nt" else "tailscale"
+
+
+def tailscale_info() -> dict:
+    """{"running": bool, "name": "talaba-ovozi.tail1a2b.ts.net", "ips": [...], "error": text} - never raises."""
+    try:
+        r = subprocess.run([tailscale_exe(), "status", "--json"], capture_output=True, text=True, timeout=15)
+        info = json.loads(r.stdout or "{}")
+        me = info.get("Self") or {}
+        return {"running": info.get("BackendState") == "Running", "state": info.get("BackendState") or "?",
+                "name": (me.get("DNSName") or "").rstrip("."), "ips": me.get("TailscaleIPs") or [], "error": ""}
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        return {"running": False, "state": "", "name": "", "ips": [], "error": str(e) or type(e).__name__}
+
+
+_tailnet = {"at": 0.0, "ips": frozenset()}
+
+
+async def tailnet_ips() -> frozenset:
+    """This computer's own Tailscale addresses (asked again every minute)."""
+    if time.time() - _tailnet["at"] > 60:
+        _tailnet["at"] = time.time()
+        _tailnet["ips"] = frozenset((await asyncio.to_thread(tailscale_info))["ips"])
+    return _tailnet["ips"]
 
 
 # Files the dashboard uploads: the picture on the bot's menu card, photos/videos of messages to students.

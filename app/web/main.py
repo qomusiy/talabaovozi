@@ -18,7 +18,7 @@ from app.web.admin import records as admin_records
 from app.web.admin import users as admin_users
 from app.web.admin import server_page as admin_server
 from app.web.admin import views as admin_views
-from app.web.deps import LoginRequired, is_local_request
+from app.web.deps import LoginRequired, is_local_request, is_tailnet_request
 from app.web.security import SECURITY_HEADERS, same_origin
 
 
@@ -58,7 +58,7 @@ def create_app() -> FastAPI:
     async def protect_admin(request: Request, call_next):
         if not request.url.path.startswith("/admin"):
             return await call_next(request)
-        if not is_local_request(request) and not await dashboard_online():
+        if not is_local_request(request) and not await is_tailnet_request(request) and not await dashboard_online():
             return PlainTextResponse("Not found", status_code=404)
         if request.method == "POST" and not same_origin(request):
             return PlainTextResponse("Forbidden", status_code=403)

@@ -189,3 +189,96 @@ def test_cloudflares_own_address_in_an_error_is_not_the_tunnels(tunnel):
     assert tunnel.url == ""
     tunnel.on_line(URL_LINE)
     assert tunnel.url == "https://gaming-immigrants-sie-interest.trycloudflare.com"
+
+
+# ---------------------------------------------------------------- Tailscale: the permanent address and its backup
+
+async def test_the_backup_carries_the_students_while_the_tailscale_address_is_down(tmp_path, monkeypatch):
+    import asyncio
+    said, published = [], []
+    monkeypatch.setattr(server, "say", said.append)
+    monkeypatch.setattr(server, "write_url", published.append)
+    monkeypatch.setattr(server, "TUNNEL_STATUS_FILE", tmp_path / "tunnel_status")
+    monkeypatch.setattr(server, "TUNNEL_RESTART_FILE", tmp_path / "tunnel_restart")
+    monkeypatch.setattr(server, "ADDRESS_CHECK_EVERY", 0)
+    funnel = "https://talaba-ovozi.tail1a2b.ts.net"
+    t = server.Tunnel("tailscale")
+    t.backup = server.Tunnel("quick")
+
+    def up():   # what tailscale_up does when Tailscale works
+        t.started()
+        t.url = funnel
+        if not t.backup_on:
+            server.write_url(funnel)
+    monkeypatch.setattr(t, "tailscale_up", up)
+    running = []
+
+    async def runs(name, loop):   # the backup's cloudflared and its watch, without starting either
+        running.append(name)
+        await asyncio.Event().wait()
+    monkeypatch.setattr(server, "forever", runs)
+    answers = iter([0, 0, 0, 200, 200])   # the Tailscale address: down 3 times, then back
+
+    async def check(url, timeout):
+        assert url == funnel
+        return next(answers), "public"
+    rounds, real_sleep = [], asyncio.sleep
+
+    async def sleep(_):
+        rounds.append(1)
+        if len(rounds) > 5:  # one check per round
+            raise Done
+        t.since = 0          # long past the first minute
+        await real_sleep(0)  # the backup's tasks get their turn
+    monkeypatch.setattr(server, "address_check", check)
+    monkeypatch.setattr(server.asyncio, "sleep", sleep)
+    with pytest.raises(Done):
+        await t.watch()
+    # down twice: the backup started; a third time: still on it; up twice: students back, backup stopped
+    assert running == ["backup tunnel", "backup tunnel watch"]
+    assert not t.backup_on and t.backup_tasks == []
+    assert published == [funnel, funnel]          # at the start, and when moved back (the backup publishes itself)
+    assert any("backup address" in x for x in said) and "students are back" in said[-1]
+
+
+async def test_the_tailscale_address_is_asked_the_way_the_internet_asks(monkeypatch):
+    from app import runtime
+    asked = []
+
+    class Client:
+        def __init__(self, **kw): ...
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): ...
+
+        async def get(self, url, headers=None, extensions=None):
+            asked.append(url)
+            if "dns-query" in url:
+                return type("R", (), {"json": lambda self: {"Answer": [{"type": 5, "data": "x"},
+                                                                       {"type": 1, "data": "209.177.145.120"}]}})()
+            assert url == "https://209.177.145.120/healthz" and extensions == {"sni_hostname": "a.tail1.ts.net"}
+            return type("R", (), {"status_code": 200})()
+    monkeypatch.setattr(runtime.httpx, "AsyncClient", Client)
+    assert await runtime.address_check("https://a.tail1.ts.net") == (200, "public")
+    assert len(asked) == 2                          # this computer's own DNS (maybe Tailscale's) was not asked
+
+
+async def test_the_dashboard_opens_over_tailscale_only_on_this_computers_tailscale_address(session, monkeypatch):
+    from httpx import ASGITransport, AsyncClient
+
+    from app.web import deps
+    from app.web.main import create_app
+
+    async def mine():
+        return frozenset({"100.101.102.103"})
+    monkeypatch.setattr(deps, "tailnet_ips", mine)
+    app = create_app()
+
+    async def status(base, **headers):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url=base) as c:
+            return (await c.get("/admin/login", headers=headers)).status_code
+    assert await status("http://100.101.102.103:8000") == 200            # your phone, over Tailscale
+    assert await status("http://192.168.1.20:8000") == 404               # the network around the computer
+    assert await status("http://100.64.0.9:8000") == 404                 # not this computer's Tailscale address
+    assert await status("http://100.101.102.103:8000", **{"X-Forwarded-For": "1.2.3.4"}) == 404   # through a proxy
+    assert (await AsyncClient(transport=ASGITransport(app=app), base_url="http://test").get("/admin/login")
+            ).status_code == 200                                         # this computer itself, as before

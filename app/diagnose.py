@@ -19,7 +19,7 @@ from datetime import datetime
 import httpx
 
 from app.config import get_settings
-from app.runtime import ROOT, address_check, server_status, tunnel_status, webapp_url
+from app.runtime import ROOT, address_check, server_status, tailscale_info, tunnel_status, webapp_url
 
 LOGS = ROOT / "data" / "runtime" / "logs"
 LOG_NAMES = ("server", "tunnel", "bot", "web")
@@ -133,7 +133,8 @@ async def report() -> dict:
     """{"verdict": key, "checks": [{"name", "ok": True/False/None (not needed), "detail"}], "tunnel": {...}, ...}"""
     s = get_settings()
     mode, url = (s.tunnel or "quick"), webapp_url()
-    cf = mode in CLOUDFLARE
+    ts = mode == "tailscale"
+    cf = mode in CLOUDFLARE or (ts and s.tunnel_backup)  # Tailscale's backup is a Cloudflare quick tunnel
 
     async def none():
         return None
@@ -141,7 +142,8 @@ async def report() -> dict:
         "local": _timed(_get(f"http://127.0.0.1:{s.web_port}/healthz")),
         "internet": _timed(_get(TRACE)),
         "dns": _timed(_dns(EDGES[0])) if cf else none(),
-        "api": _timed(_get(QUICK_API)) if mode == "quick" else none(),
+        "api": _timed(_get(QUICK_API)) if cf and mode != "cloudflare" else none(),
+        "tailscale": asyncio.to_thread(tailscale_info) if ts else none(),
         "edge1": _timed(_edge(EDGES[0])) if cf else none(),
         "edge2": _timed(_edge(EDGES[1])) if cf else none(),
         "public": _timed(address_check(url, timeout=6), 14) if url else none(),
@@ -167,7 +169,11 @@ async def report() -> dict:
     if cf:
         ok, r, ms = got["dns"]
         add("dns", ok, f"{EDGES[0]} → {r}" if ok else f"{EDGES[0]}: {r}")
-    if mode == "quick":
+    if ts:
+        t = got["tailscale"]
+        add("tailscale", t["running"], " · ".join(x for x in (t["name"], ", ".join(t["ips"][:1])) if x) if t["running"]
+            else (t["error"] or f"state {t['state']} - signed out? run scripts\\setup.bat at the computer"))
+    if cf and mode != "cloudflare":
         ok, r, ms = got["api"]
         add("api", ok, f"HTTP {r.status_code} · {ms} ms" if ok else r)  # any answer: it is reachable
     if cf:
@@ -181,7 +187,8 @@ async def report() -> dict:
         code, how = r if ok else (0, r)
         host = url.split("//", 1)[-1]
         add("public", code == 200, f"{host} · HTTP {code} · {ms} ms" + (
-            " · via Cloudflare IPv4 (this network's DNS doesn't know the address yet)" if how == "edge" else "")
+            " · via Cloudflare IPv4 (this network's DNS doesn't know the address yet)" if how == "edge" and code == 200
+            else "")
             if code else f"{host}: {how}")
     else:
         add("public", False, "—")
@@ -190,10 +197,11 @@ async def report() -> dict:
     child = (st.get("children") or {}).get("tunnel") or {}
     found = tunnel_findings(tail("tunnel", 600)) if cf else {"connected": "", "precheck": {}, "errors": []}
     now = st.get("cloudflared") or {}  # what the server knows this minute (app.server.Tunnel)
+    backup = st.get("backup") or {}
     tunnel = {"mode": mode, "url": url, "state": tunnel_status()["state"], "running": child.get("running"),
               "restarts": child.get("restarts"), "since": child.get("since"), "version": got["version"],
               "connected_now": now.get("connected"), "protocol": now.get("protocol"), "misses": now.get("misses"),
-              **found}
+              "backup_on": bool(backup.get("on")), "backup_url": backup.get("url") or "", **found}
 
     by = {c["name"]: c["ok"] for c in checks}
     if not st:
@@ -206,6 +214,10 @@ async def report() -> dict:
         verdict = "off"
     elif not by["internet"]:
         verdict = "offline"
+    elif ts and not by["tailscale"]:
+        verdict = "tailscale"
+    elif ts:
+        verdict = "funnel"
     elif cf and not by["dns"]:
         verdict = "dns"
     elif cf and not by["edge1"] and not by["edge2"]:
@@ -250,6 +262,8 @@ VERDICTS = {
     "port_blocked": "The network blocks port 7844 to Cloudflare's tunnel servers - the tunnel cannot connect. "
                     "Ask the network's admin to allow outgoing TCP and UDP 7844, or use another network / TUNNEL=tailscale.",
     "clock": "This computer's clock is wrong - set the time automatically (Windows: Settings › Time).",
+    "tailscale": "Tailscale is not running or is signed out on this computer - run scripts\\setup.bat there.",
+    "funnel": "Tailscale runs, but its public address doesn't answer - Funnel off? (tailscale funnel status)",
     "api": "api.trycloudflare.com does not answer - Cloudflare hands out no new quick addresses right now.",
     "tunnel": "The network is fine; the tunnel itself fails - see its errors below and tunnel.log.",
 }
@@ -262,6 +276,8 @@ def main() -> None:
     for c in r["checks"]:
         print(f"  {mark[c['ok']]}  {c['name']:9} {c['detail']}")
     t = r["tunnel"]
+    if t["backup_on"]:
+        print(f"\n  backup   in use: {t['backup_url'] or 'connecting'}")
     print(f"\n  tunnel   TUNNEL={t['mode']}  cloudflared {t['version'] or '-'}  restarts {t['restarts']}"
           f"  connected now {t['connected_now']} ({t['protocol']}, failed tries {t['misses']})"
           f"  last connected {t['connected'] or 'never (in the log)'}")

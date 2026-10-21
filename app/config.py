@@ -24,8 +24,11 @@ class Settings(BaseSettings):
     # (the same address forever - README › Fixed address).
     tunnel: str = "quick"
     cloudflare_tunnel_token: str = ""   # TUNNEL=cloudflare only
+    # TUNNEL=tailscale: when the Tailscale address stops answering, students get a Cloudflare quick tunnel meanwhile.
+    tunnel_backup: bool = True
 
-    # Web server (survey + admin dashboard)
+    # Web server (survey + admin dashboard). 0.0.0.0: also reachable at this computer's Tailscale address, where
+    # the dashboard opens for your own devices (README › Remote access; nothing else gets the dashboard).
     web_host: str = "127.0.0.1"
     web_port: int = 8000
     # DEV ONLY: lets you open the survey in a normal browser on this computer: /survey?dev=<Telegram id>
